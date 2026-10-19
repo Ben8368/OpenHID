@@ -1,0 +1,912 @@
+//! tarpc IPC server: backs the [`Agent`] service with the orchestrator and the
+//! agent-core device-I/O helpers, listening on the agent's local IPC socket
+//! (a Unix-domain socket on Unix, a named pipe on Windows).
+//!
+//! The agent owns all device I/O, so the GUI never opens a device — it routes
+//! "apply now" / "read" commands here, and polls snapshots.
+
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use futures::StreamExt as _;
+use openhid_agent_core::action_ring::ActionRingManager;
+use openhid_agent_core::backlight_overlay::BacklightOverlayManager;
+use openhid_agent_core::event_monitor::SharedEventMonitor;
+use openhid_agent_core::observable::ObservableState;
+use openhid_agent_core::orchestrator::{self, Orchestrator, SharedHandles};
+use openhid_agent_core::runtime::ActionDispatcher;
+use openhid_core::binding::ActionRingSlot;
+use openhid_core::config::{ConfigFile, Lighting};
+use openhid_core::device::DeviceInventory;
+use openhid_hid::{
+    BacklightChange, BacklightState, DeviceRoute, Dpi, DpiInfo, EasySwitchHosts, FnLockState,
+    HapticWaveform, HidppOperation, LightCommand, ReceiverSelector, ReportRate, ReportRateInfo,
+    ScrollWheelMode, SmartShiftStatus, WriteError,
+};
+use openhid_ipc::transport;
+use openhid_ipc::{
+    ActionRingCommandError, ActionRingInvocation, Agent, AgentSnapshot, AgentStatus,
+    BacklightObservation, ClientKind, ConfigReloadError, Generation, Identity, MonitorEvent,
+    Observation, PROTOCOL_VERSION, PairingCommandError, PairingFailure, PairingUpdate,
+    RingObservation, SavedConfig,
+};
+use succession::Compat;
+
+use crate::pairing::PairingManager;
+// Brings `Listener::accept` into scope for the concrete listener `transport::bind`
+// returns; `as _` keeps it anonymous (method resolution only).
+use interprocess::local_socket::traits::tokio::Listener as _;
+use openhid_hook::Hook;
+use tarpc::context::Context;
+use tarpc::server::{BaseChannel, Channel as _};
+use tokio::sync::Mutex;
+use tracing::{debug, info, warn};
+
+/// Shared handle to the agent's state, cloned per connection (and per request).
+#[derive(Clone)]
+pub struct AgentServer {
+    pub orchestrator: Arc<Mutex<Orchestrator>>,
+    pub shared: SharedHandles,
+    /// Everything the GUI observes, answered from here rather than recomposed
+    /// per request: reads take no orchestrator lock and no permission syscall.
+    pub observable: Arc<ObservableState>,
+    pub pairing: Arc<PairingManager>,
+    pub event_monitor: SharedEventMonitor,
+    pub action_ring: Arc<ActionRingManager>,
+    pub dispatcher: ActionDispatcher,
+    pub ring_haptics: RingHapticPlayer,
+    pub backlight_overlay: BacklightOverlayManager,
+    /// Forwards each connection's [`ClientKind`] declaration to the
+    /// dormancy gate.
+    pub demand: tokio::sync::mpsc::UnboundedSender<ClientKind>,
+}
+
+impl AgentServer {
+    /// Build a server and start the coalescing Actions Ring haptic worker.
+    /// The second return is the demand channel the dormancy gate drains.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the IPC server owns the agent's independent runtime services"
+    )]
+    pub fn new(
+        orchestrator: Arc<Mutex<Orchestrator>>,
+        shared: SharedHandles,
+        observable: Arc<ObservableState>,
+        pairing: Arc<PairingManager>,
+        event_monitor: SharedEventMonitor,
+        action_ring: Arc<ActionRingManager>,
+        dispatcher: ActionDispatcher,
+        backlight_overlay: BacklightOverlayManager,
+    ) -> (Self, tokio::sync::mpsc::UnboundedReceiver<ClientKind>) {
+        let ring_haptics = RingHapticPlayer::spawn(shared.clone());
+        let (demand, declarations) = tokio::sync::mpsc::unbounded_channel();
+        (
+            Self {
+                orchestrator,
+                shared,
+                observable,
+                pairing,
+                event_monitor,
+                action_ring,
+                dispatcher,
+                ring_haptics,
+                backlight_overlay,
+                demand,
+            },
+            declarations,
+        )
+    }
+
+    /// Re-read `config.toml` for [`Agent::reload_config`], or for
+    /// [`Agent::reload_saved_config`] when the GUI's save is given. The
+    /// revision is that of the text the config is parsed from, so an edit
+    /// that lands after the read cannot pass for the save.
+    async fn reload(self, saved: Option<SavedConfig>) -> Result<(), ConfigReloadError> {
+        match ConfigFile::load_or_default() {
+            Ok((config, file)) => {
+                let launch_at_login = config.app_settings.launch_at_login;
+                #[cfg(target_os = "macos")]
+                let app_icon = config.app_settings.app_icon;
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                let tray_config = config.clone();
+                let language = config.app_settings.language.clone();
+                match saved {
+                    None => self.orchestrator.lock().await.reload_config(config),
+                    Some(saved) => self.orchestrator.lock().await.reload_saved_config(
+                        config,
+                        file.revision(),
+                        &saved,
+                    ),
+                }
+                self.dispatcher.cancel_all_buttons();
+                // The GUI's launch-at-login toggle reaches us through this
+                // reload, so re-reconcile the autostart from the new config.
+                crate::autostart::reconcile(launch_at_login);
+                // So does the app icon, and the menu-bar item is ours to
+                // restyle — the GUI can only reach the Dock and the bundle.
+                #[cfg(target_os = "macos")]
+                crate::tray::set_icon(app_icon);
+                // And the interface language: re-resolve the process locale
+                // (the Windows popup rebuilds per show and picks it up alone)
+                // and rebuild the macOS menu, whose titles were stamped at
+                // install.
+                openhid_core::locale::activate(language.as_deref());
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                crate::tray_status::configure(&tray_config);
+                #[cfg(target_os = "macos")]
+                crate::tray::relocalize();
+                Ok(())
+            }
+            Err(error) => {
+                warn!(error = %error, "reload_config: parse failed; keeping current config");
+                Err(ConfigReloadError {
+                    message: error.to_string(),
+                })
+            }
+        }
+    }
+}
+
+#[expect(
+    clippy::unused_async_trait_impl,
+    reason = "the handlers that only read cached state need no await, but the RPC \
+              surface reads as one thing when every method in the impl keeps the \
+              `async fn` the tarpc trait declares — worth more than shaving a \
+              future off a dozen of them with `std::future::ready`"
+)]
+impl Agent for AgentServer {
+    async fn protocol_version(self, _: Context) -> u32 {
+        PROTOCOL_VERSION
+    }
+
+    async fn observe_backlight(self, _: Context, since: Generation) -> BacklightObservation {
+        self.backlight_overlay.observe(since).await
+    }
+
+    /// `Run::mint` is process-global, so the overlay supervisor hands its
+    /// child the very same run this answers with.
+    async fn identity(self, _: Context) -> Identity {
+        Identity::mine(Compat::from(PROTOCOL_VERSION))
+    }
+
+    async fn status(self, _: Context) -> AgentStatus {
+        self.observable.read(|state| state.status.clone())
+    }
+
+    async fn inventory(self, _: Context) -> Vec<DeviceInventory> {
+        self.observable.read(|state| state.inventory.clone())
+    }
+
+    async fn reload_config(self, _: Context) -> Result<(), ConfigReloadError> {
+        self.reload(None).await
+    }
+
+    async fn set_dpi(self, _: Context, route: DeviceRoute, dpi: Dpi) -> Result<(), WriteError> {
+        self.shared
+            .device(&route)
+            .run(HidppOperation::WriteDpi, |c| async move {
+                openhid_hid::set_dpi_on(&c, dpi).await
+            })
+            .await
+    }
+
+    async fn set_lighting(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        lighting: Lighting,
+    ) -> Result<(), WriteError> {
+        self.shared.device(&route).lighting(&lighting)?.wait().await
+    }
+
+    async fn set_smartshift(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        status: SmartShiftStatus,
+    ) -> Result<(), WriteError> {
+        self.shared
+            .device(&route)
+            .run(HidppOperation::WriteSmartShift, |c| async move {
+                openhid_hid::set_smartshift_on(&c, status).await
+            })
+            .await
+    }
+
+    async fn read_dpi(self, _: Context, route: DeviceRoute) -> Result<DpiInfo, WriteError> {
+        self.shared
+            .device(&route)
+            .run(HidppOperation::ReadDpiCapabilities, |c| async move {
+                openhid_hid::get_dpi_info_on(&c).await
+            })
+            .await
+    }
+
+    async fn read_smartshift(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<SmartShiftStatus, WriteError> {
+        self.shared
+            .device(&route)
+            .run(HidppOperation::ReadSmartShift, |c| async move {
+                openhid_hid::get_smartshift_status_on(&c).await
+            })
+            .await
+    }
+
+    async fn read_wheel(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<ScrollWheelMode, WriteError> {
+        self.shared
+            .device(&route)
+            .run(HidppOperation::ReadWheelMode, |c| async move {
+                openhid_hid::get_scroll_wheel_mode_on(&c).await
+            })
+            .await
+    }
+
+    async fn read_backlight(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<BacklightState, WriteError> {
+        self.shared
+            .device(&route)
+            .run(HidppOperation::ReadBacklight, |c| async move {
+                openhid_hid::get_backlight_on(&c).await
+            })
+            .await
+    }
+
+    async fn read_fn_lock(self, _: Context, route: DeviceRoute) -> Result<FnLockState, WriteError> {
+        self.shared
+            .keyboard_device(&route)
+            .run(HidppOperation::ReadFnLock, |c| async move {
+                openhid_hid::get_fn_lock_on(&c).await
+            })
+            .await
+    }
+
+    async fn set_fn_lock(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        fn_lock: bool,
+    ) -> Result<FnLockState, WriteError> {
+        self.shared.set_fn_lock(&route, fn_lock).await
+    }
+
+    async fn request_accessibility_prompt(self, _: Context) {
+        Hook::prompt_accessibility();
+    }
+
+    async fn start_pairing(
+        self,
+        _: Context,
+        selector: ReceiverSelector,
+    ) -> Result<(), PairingCommandError> {
+        self.pairing.start(selector).await
+    }
+
+    async fn pair_device(self, _: Context, address: [u8; 6]) -> Result<(), PairingCommandError> {
+        self.pairing.pair(address)
+    }
+
+    async fn cancel_pairing(self, _: Context) -> Result<(), PairingCommandError> {
+        self.pairing.cancel()
+    }
+
+    async fn unpair_device(self, _: Context, route: DeviceRoute) -> Result<(), PairingFailure> {
+        self.pairing.unpair(&route).await
+    }
+    async fn read_report_rate(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<ReportRateInfo, WriteError> {
+        self.shared
+            .device(&route)
+            .run(HidppOperation::ReadReportRate, |c| async move {
+                openhid_hid::get_report_rate_info_on(&c).await
+            })
+            .await
+    }
+    async fn set_report_rate(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        rate: ReportRate,
+    ) -> Result<ReportRateInfo, WriteError> {
+        self.shared.set_report_rate(&route, rate).await
+    }
+    async fn set_backlight(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        change: BacklightChange,
+    ) -> Result<BacklightState, WriteError> {
+        self.shared.set_backlight(&route, change).await
+    }
+
+    async fn read_easy_switch_hosts(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<EasySwitchHosts, WriteError> {
+        self.shared
+            .device(&route)
+            .run(HidppOperation::ReadHosts, |c| async move {
+                openhid_hid::get_easy_switch_hosts_on(&c).await
+            })
+            .await
+    }
+
+    async fn rename_easy_switch_host(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        slot: u8,
+        name: String,
+    ) -> Result<EasySwitchHosts, WriteError> {
+        self.shared
+            .rename_easy_switch_host(&route, slot, name)
+            .await
+    }
+    async fn reload_saved_config(
+        self,
+        _: Context,
+        saved: SavedConfig,
+    ) -> Result<(), ConfigReloadError> {
+        self.reload(Some(saved)).await
+    }
+
+    async fn next_pairing(self, _: Context) -> Option<PairingUpdate> {
+        self.pairing.next_update().await
+    }
+
+    async fn acknowledge_device_selection(self, _: Context, request: openhid_ipc::DeviceSelection) {
+        self.observable.acknowledge_device_selection(&request);
+    }
+
+    async fn snapshot(self, _: Context) -> AgentSnapshot {
+        self.observable.snapshot()
+    }
+
+    async fn observe(self, _: Context, since: Generation) -> Observation {
+        self.observable.observe(since).await
+    }
+
+    async fn poll_event_monitor(self, _: Context) -> Vec<MonitorEvent> {
+        self.event_monitor.poll()
+    }
+
+    async fn set_light(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        command: LightCommand,
+    ) -> Result<(), WriteError> {
+        let hardware = self.shared.hardware();
+        orchestrator::write_light(
+            &self.orchestrator,
+            &route,
+            command,
+            hardware.apply_light(&route, command),
+        )
+        .await
+    }
+
+    async fn set_light_manual_power(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        enabled: bool,
+    ) -> Result<(), WriteError> {
+        self.shared
+            .hardware()
+            .apply_light(&route, LightCommand::Power(enabled))
+            .await?;
+        if !self
+            .orchestrator
+            .lock()
+            .await
+            .set_manual_light_power(&route, enabled)
+        {
+            warn!(?route, "manual light power applied without camera override");
+        }
+        Ok(())
+    }
+
+    async fn next_action_ring(self, _: Context) -> Option<ActionRingInvocation> {
+        // Superseded by `observe_action_ring`; nothing calls this, and a
+        // matching-version overlay never will (see the trait's note).
+        None
+    }
+
+    async fn observe_action_ring(self, _: Context, since: Generation) -> RingObservation {
+        self.action_ring.observe(since).await
+    }
+
+    async fn declare_client(self, _: Context, kind: ClientKind) {
+        // A failed send is the designed steady state: the gate drops its
+        // receiver at arming, and an armed agent no longer cares.
+        let _ = self.demand.send(kind);
+    }
+
+    async fn action_ring_hover(
+        self,
+        _: Context,
+        session_id: u64,
+        slot: ActionRingSlot,
+    ) -> Result<(), ActionRingCommandError> {
+        if let Some(hover) = self.action_ring.hover(session_id, slot)? {
+            self.ring_haptics
+                .play(hover.haptic_route, HapticWaveform::SubtleCollision, "hover");
+        }
+        Ok(())
+    }
+
+    async fn action_ring_activate(
+        self,
+        _: Context,
+        session_id: u64,
+        slot: ActionRingSlot,
+    ) -> Result<(), ActionRingCommandError> {
+        let activation = self.action_ring.activate(session_id, slot)?;
+        self.dispatcher
+            .dispatch(&activation.action, Some(&activation.device_key));
+        self.ring_haptics.play(
+            activation.haptic_route,
+            HapticWaveform::DampStateChange,
+            "activation",
+        );
+        Ok(())
+    }
+
+    async fn action_ring_cancel(self, _: Context, session_id: u64) {
+        self.action_ring.cancel(session_id);
+    }
+}
+
+/// Coalescing Actions Ring haptic player: at most one waveform is in flight,
+/// and while it plays only the newest queued request survives (latest wins).
+///
+/// Spawning one task per hover let a fast pointer queue HID++ plays faster
+/// than the receiver drains them; the backlog then times out every
+/// transaction on the channel for seconds at a time — dead haptics, and
+/// collateral timeouts for unrelated writes (DPI, SmartShift) on the same
+/// receiver. A stale hover buzz has no value, so dropping superseded requests
+/// is strictly better than queueing them.
+#[derive(Clone)]
+pub struct RingHapticPlayer {
+    tx: tokio::sync::watch::Sender<Option<(DeviceRoute, HapticWaveform, &'static str)>>,
+    pending_arm: Arc<std::sync::Mutex<Option<DeviceRoute>>>,
+}
+
+/// How long every attempt at one buzz may take together.
+///
+/// The write path bounds a single call at its own 5 s, which is sized for a
+/// user-visible setting write, not for feedback: three attempts of it outlast
+/// the ring's own 15 s lifetime, so one hover on a lossy channel could consume
+/// a whole session while every later interaction — the activation buzz
+/// included — was dropped by this worker's latest-wins channel. Past a couple
+/// of seconds a buzz is not feedback any more anyway.
+const PLAY_BUDGET: Duration = Duration::from_secs(2);
+
+/// How long the firmware arming check may take before the first buzz.
+///
+/// Arming is a repair: a play works without it on any device that never lost
+/// the state, so it must not be the thing that makes a session feel dead. Two
+/// attempts at the write path's budget put 10 s in front of the first buzz.
+const ARM_BUDGET: Duration = Duration::from_secs(1);
+
+/// Re-assert the firmware haptic engine before the session's first buzz,
+/// within [`ARM_BUDGET`].
+///
+/// Best-effort by design: a device that never lost the state plays fine
+/// without this, so a silent channel must cost the session a bounded delay
+/// rather than its whole haptic budget.
+async fn arm_firmware_haptics(shared: &SharedHandles, route: &DeviceRoute) {
+    let budget = Budget::starting_at(Instant::now(), ARM_BUDGET);
+    for attempt in 1..=2u8 {
+        let Some(remaining) = budget.remaining(Instant::now()) else {
+            warn!("firmware haptic check ran out of time — leaving it to the buzz");
+            return;
+        };
+        match tokio::time::timeout(
+            remaining,
+            shared
+                .device(route)
+                .run(HidppOperation::PlayHaptic, |c| async move {
+                    openhid_hid::ensure_haptics_armed_on(&c).await
+                }),
+        )
+        .await
+        {
+            Ok(Ok(true)) => {
+                info!("firmware haptics were disarmed — re-enabled");
+                return;
+            }
+            Ok(Ok(false)) => return,
+            Ok(Err(error)) => {
+                if attempt == 2 {
+                    warn!(%error, "could not verify firmware haptic state");
+                }
+            }
+            // Out of budget mid-attempt; the loop head reports it and returns.
+            Err(_elapsed) => {}
+        }
+    }
+}
+
+/// Play one waveform, retrying within [`PLAY_BUDGET`].
+///
+/// A busy receiver drops HID++ replies under concurrent pointer traffic, so a
+/// single attempt fails exactly when the user is actively hovering. Retrying
+/// is worth it — but only until either the budget is gone or a newer request
+/// supersedes this one, since a stale buzz has no value and this worker is
+/// single-flight.
+async fn play_within_budget(
+    shared: &SharedHandles,
+    rx: &tokio::sync::watch::Receiver<Option<(DeviceRoute, HapticWaveform, &'static str)>>,
+    route: &DeviceRoute,
+    waveform: HapticWaveform,
+    interaction: &'static str,
+) -> PlayOutcome {
+    let budget = Budget::starting_at(Instant::now(), PLAY_BUDGET);
+    for attempt in 1..=3u8 {
+        let Some(remaining) = budget.remaining(Instant::now()) else {
+            warn!(
+                interaction,
+                "ring haptic gave up — out of time to be feedback"
+            );
+            return PlayOutcome::Failed;
+        };
+        match tokio::time::timeout(
+            remaining,
+            shared
+                .device(route)
+                .run(HidppOperation::PlayHaptic, |c| async move {
+                    openhid_hid::play_haptic_on(&c, waveform).await
+                }),
+        )
+        .await
+        {
+            Ok(Ok(())) => return PlayOutcome::Played,
+            Ok(Err(error)) if !is_worth_retrying(&error) => {
+                // Nothing was sent, and every hover asks again: no warning.
+                debug!(%error, interaction, "Actions Ring haptic skipped");
+                return PlayOutcome::Skipped;
+            }
+            Ok(Err(error)) => {
+                let superseded = rx.has_changed().unwrap_or(true);
+                if attempt == 3 || superseded {
+                    warn!(%error, interaction, attempt, superseded, "Actions Ring haptic failed");
+                    return PlayOutcome::Failed;
+                }
+            }
+            // Out of budget mid-attempt; the loop head reports it and stops,
+            // so a lost reply and a slow one stay distinguishable in the log.
+            Err(_elapsed) => {}
+        }
+    }
+    PlayOutcome::Failed
+}
+
+/// What one interaction's play came to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlayOutcome {
+    Played,
+    /// Refused before anything was sent: the device does not advertise the
+    /// waveform. Says nothing about the link.
+    Skipped,
+    /// Lost, refused by the device, or out of budget.
+    Failed,
+}
+
+/// The circuit breaker over lost plays. When replies keep getting lost,
+/// further attempts only keep the channel saturated (and starve unrelated
+/// writes), so haptics pause for a short cool-down while the pipe drains;
+/// feedback resumes on the next buzz after.
+#[derive(Debug, Default)]
+struct HapticBreaker {
+    consecutive_failures: u32,
+    cooldown_until: Option<Instant>,
+}
+
+impl HapticBreaker {
+    const TRIP_AFTER: u32 = 3;
+    const COOL_DOWN: Duration = Duration::from_secs(4);
+
+    /// Whether a play may be attempted at `now`. An expired cool-down ends.
+    fn allows(&mut self, now: Instant) -> bool {
+        match self.cooldown_until {
+            Some(until) if now < until => false,
+            Some(_) => {
+                self.cooldown_until = None;
+                true
+            }
+            None => true,
+        }
+    }
+
+    /// Count `outcome`; returns whether it opened a cool-down. A skipped play
+    /// neither counts nor resets the streak: no request went out, so it says
+    /// nothing about whether replies are getting through.
+    fn record(&mut self, outcome: PlayOutcome, now: Instant) -> bool {
+        match outcome {
+            PlayOutcome::Played => {
+                self.consecutive_failures = 0;
+                false
+            }
+            PlayOutcome::Skipped => false,
+            PlayOutcome::Failed => {
+                self.consecutive_failures += 1;
+                if self.consecutive_failures < Self::TRIP_AFTER {
+                    return false;
+                }
+                self.consecutive_failures = 0;
+                self.cooldown_until = Some(now + Self::COOL_DOWN);
+                true
+            }
+        }
+    }
+}
+
+/// Whether a failed play can succeed on a retry. A waveform the device does
+/// not advertise, and a play while the device reports a non-zero haptic
+/// status, are refused before anything is sent, so retrying either would
+/// only spend the budget the next interaction is waiting on.
+fn is_worth_retrying(error: &WriteError) -> bool {
+    !matches!(
+        error,
+        WriteError::HapticWaveformUnsupported { .. } | WriteError::HapticsUnavailable { .. }
+    )
+}
+
+/// A wall-clock allowance shared by every attempt at one interaction.
+///
+/// The worker is single-flight, so time one buzz spends retrying is time the
+/// next interaction spends waiting. Attempts therefore share a budget rather
+/// than each getting the write path's full one.
+#[derive(Clone, Copy)]
+struct Budget {
+    deadline: Instant,
+}
+
+impl Budget {
+    fn starting_at(now: Instant, total: Duration) -> Self {
+        Self {
+            deadline: now + total,
+        }
+    }
+
+    /// How long the next attempt may take, or `None` when nothing is left.
+    ///
+    /// A spent budget is deliberately `None` rather than `Some(ZERO)`:
+    /// `timeout(ZERO, …)` elapses before the call it wraps can run, which
+    /// would log a device failure that never happened.
+    fn remaining(self, now: Instant) -> Option<Duration> {
+        let left = self.deadline.saturating_duration_since(now);
+        (!left.is_zero()).then_some(left)
+    }
+}
+
+impl RingHapticPlayer {
+    /// Spawn the single-flight worker. Must be called from a tokio runtime.
+    pub fn spawn(shared: SharedHandles) -> Self {
+        let (tx, mut rx) = tokio::sync::watch::channel::<
+            Option<(DeviceRoute, HapticWaveform, &'static str)>,
+        >(None);
+        let pending_arm = Arc::new(std::sync::Mutex::new(None::<DeviceRoute>));
+        let worker_arm = Arc::clone(&pending_arm);
+        tokio::spawn(async move {
+            let mut breaker = HapticBreaker::default();
+            while rx.changed().await.is_ok() {
+                // Firmware arming is sequenced through this worker so it is
+                // guaranteed to complete before the session's first buzz —
+                // spawning it separately let the first hover race (and lose
+                // to) a disarmed haptic engine.
+                let arm_route = worker_arm
+                    .lock()
+                    .ok()
+                    .and_then(|mut pending| pending.take());
+                if let Some(route) = arm_route {
+                    // A new session starts the breaker over. It is
+                    // worker-lifetime state, so without this a session that
+                    // ended two failures deep makes the next session's first
+                    // failure trip the cool-down, and a cool-down opened at the
+                    // tail of one ring silences the opening of the next.
+                    breaker = HapticBreaker::default();
+                    arm_firmware_haptics(&shared, &route).await;
+                }
+                let request = rx.borrow_and_update().clone();
+                let Some((route, waveform, interaction)) = request else {
+                    continue;
+                };
+                if !breaker.allows(Instant::now()) {
+                    continue;
+                }
+                let outcome = play_within_budget(&shared, &rx, &route, waveform, interaction).await;
+                if breaker.record(outcome, Instant::now()) {
+                    info!(
+                        interaction,
+                        "ring haptics cooling down after repeated HID++ loss"
+                    );
+                }
+            }
+        });
+        Self { tx, pending_arm }
+    }
+
+    /// Queue a firmware arming check to run before the session's first buzz.
+    /// The wake-up send also clears any stale not-yet-played waveform from a
+    /// previous session so it cannot replay.
+    pub fn arm(&self, route: Option<DeviceRoute>) {
+        let Some(route) = route else {
+            return;
+        };
+        if let Ok(mut pending) = self.pending_arm.lock() {
+            *pending = Some(route);
+        }
+        let _ = self.tx.send(None);
+    }
+
+    /// Queue `waveform`, replacing any not-yet-played request.
+    fn play(
+        &self,
+        route: Option<DeviceRoute>,
+        waveform: HapticWaveform,
+        interaction: &'static str,
+    ) {
+        let Some(route) = route else {
+            return;
+        };
+        let _ = self.tx.send(Some((route, waveform, interaction)));
+    }
+}
+
+/// Bind the agent's IPC socket and serve [`Agent`] requests until the process
+/// exits. A stale socket left by a prior crash is reclaimed by the listener —
+/// `main` holds the single-instance lock (`agent.lock`), so no other live agent
+/// owns this socket and any leftover is from a dead instance.
+pub async fn run(server: AgentServer) {
+    let listener = match transport::bind() {
+        Ok(listener) => listener,
+        Err(e) => {
+            warn!(error = %e, "could not bind IPC socket; IPC disabled");
+            return;
+        }
+    };
+    info!("IPC server listening");
+
+    loop {
+        let stream = match listener.accept().await {
+            Ok(stream) => stream,
+            Err(e) => {
+                warn!(error = %e, "IPC accept failed");
+                continue;
+            }
+        };
+        let server = server.clone();
+        let channel = BaseChannel::with_defaults(transport::wrap(stream));
+        tokio::spawn(
+            channel
+                .execute(server.serve())
+                .for_each(|response| async move {
+                    tokio::spawn(response);
+                }),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ARM_BUDGET, Budget, HapticBreaker, PLAY_BUDGET, PlayOutcome, WriteError, is_worth_retrying,
+    };
+    use std::time::{Duration, Instant};
+
+    /// Attempts share one allowance, so the second gets what the first left —
+    /// not another full one, which is how three retries came to outlast the
+    /// ring they were giving feedback for.
+    #[test]
+    fn a_partly_spent_budget_offers_only_the_remainder() {
+        let start = Instant::now();
+        let budget = Budget::starting_at(start, Duration::from_secs(2));
+
+        let left = budget
+            .remaining(start + Duration::from_millis(1500))
+            .unwrap();
+
+        assert_eq!(left, Duration::from_millis(500));
+    }
+
+    /// `timeout(ZERO, …)` elapses before the call it wraps can run, so a spent
+    /// budget has to read as "stop", not as "you have no time".
+    #[test]
+    fn a_spent_budget_offers_nothing_rather_than_zero() {
+        let start = Instant::now();
+        let budget = Budget::starting_at(start, Duration::from_secs(2));
+
+        assert_eq!(budget.remaining(start + Duration::from_secs(2)), None);
+        assert_eq!(budget.remaining(start + Duration::from_secs(5)), None);
+    }
+
+    /// Both budgets exist to keep one interaction from eating the 15 s session
+    /// the ring is open for, and arming must not outlast the buzz it precedes.
+    #[test]
+    fn the_budgets_stay_within_a_ring_session() {
+        assert!(ARM_BUDGET < PLAY_BUDGET);
+        assert!(ARM_BUDGET + PLAY_BUDGET < Duration::from_secs(15));
+    }
+
+    #[test]
+    fn a_play_refused_before_sending_is_not_retried_but_a_lost_reply_is() {
+        assert!(!is_worth_retrying(&WriteError::HapticWaveformUnsupported {
+            waveform: 1
+        }));
+        assert!(!is_worth_retrying(&WriteError::HapticsUnavailable {
+            status: 2
+        }));
+        assert!(is_worth_retrying(&WriteError::DeviceUnreachable {
+            index: 1
+        }));
+    }
+
+    #[test]
+    fn unadvertised_hovers_never_cool_down_a_supported_activation() {
+        let now = Instant::now();
+        let mut breaker = HapticBreaker::default();
+        // Three hovers the device does not advertise, then an activation
+        // whose waveform it does.
+        for _ in 0..3 {
+            assert!(breaker.allows(now));
+            assert!(!breaker.record(PlayOutcome::Skipped, now));
+        }
+        assert!(
+            breaker.allows(now),
+            "skipped hovers must not open the cool-down"
+        );
+        assert!(!breaker.record(PlayOutcome::Played, now));
+    }
+
+    #[test]
+    fn three_lost_plays_cool_down_until_the_window_ends() {
+        let now = Instant::now();
+        let mut breaker = HapticBreaker::default();
+        assert!(!breaker.record(PlayOutcome::Failed, now));
+        assert!(!breaker.record(PlayOutcome::Failed, now));
+        assert!(breaker.record(PlayOutcome::Failed, now), "the third trips");
+        assert!(!breaker.allows(now + Duration::from_millis(3999)));
+        assert!(breaker.allows(now + HapticBreaker::COOL_DOWN));
+        // The window ended and the streak restarted from zero.
+        assert!(breaker.allows(now + HapticBreaker::COOL_DOWN));
+        assert!(!breaker.record(PlayOutcome::Failed, now + HapticBreaker::COOL_DOWN));
+    }
+
+    #[test]
+    fn a_skip_neither_counts_nor_resets_a_failure_streak_but_a_play_does() {
+        let now = Instant::now();
+        let mut skipped = HapticBreaker::default();
+        assert!(!skipped.record(PlayOutcome::Failed, now));
+        assert!(!skipped.record(PlayOutcome::Failed, now));
+        assert!(!skipped.record(PlayOutcome::Skipped, now));
+        assert!(
+            skipped.record(PlayOutcome::Failed, now),
+            "the skip left the two failures standing"
+        );
+
+        let mut played = HapticBreaker::default();
+        assert!(!played.record(PlayOutcome::Failed, now));
+        assert!(!played.record(PlayOutcome::Failed, now));
+        assert!(!played.record(PlayOutcome::Played, now));
+        assert!(
+            !played.record(PlayOutcome::Failed, now),
+            "a play reset the streak"
+        );
+    }
+}

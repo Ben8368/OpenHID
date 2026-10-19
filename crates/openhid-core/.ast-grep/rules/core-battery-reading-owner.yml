@@ -1,0 +1,21 @@
+# Owner: openhid_core::battery — firmware readings shared by GUI and tray.
+id: core-battery-reading-owner
+language: rust
+severity: error
+message: Battery readings belong to openhid_core::battery; reuse ChargeReading and its interpretation helpers.
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/openhid-core/src/battery.rs
+rule:
+  any:
+    - all:
+        - kind: enum_item
+        - has:
+            field: name
+            regex: '^ChargeReading$'
+    - all:
+        - kind: function_item
+        - has:
+            field: name
+            regex: '^(charge_reading|current_charge_reading|is_charging|glyph_fill|battery_charging_no_reading|battery_needs_attention)$'

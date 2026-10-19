@@ -1,0 +1,15 @@
+[package]
+publish = false
+name = "openhid-device-registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Pure hardware identity registry for OpenHID devices and receivers."
+keywords = ["logitech", "hidpp", "device", "registry", "hid"]
+categories = ["hardware-support", "no-std"]
+
+[lints]
+workspace = true

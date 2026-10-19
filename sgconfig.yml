@@ -1,0 +1,15 @@
+# Keep one project root so rules beside their owners retain repository-wide path selectors.
+# Placement and verification: .agents/rules/ci.md, "ast-grep rules".
+ruleDirs:
+  - .ast-grep/rules
+  - crates/openhid-agent-core/.ast-grep/rules
+  - crates/openhid-cli/.ast-grep/rules
+  - crates/openhid-core/.ast-grep/rules
+  - crates/openhid-desktop/.ast-grep/rules
+  - crates/openhid-device/.ast-grep/rules
+  - crates/openhid-fixture/.ast-grep/rules
+  - crates/openhid-hidpp/.ast-grep/rules
+  - crates/openhid-hook/.ast-grep/rules
+  - crates/openhid-inject/.ast-grep/rules
+  - crates/openhid-ipc/.ast-grep/rules
+  - xtask/.ast-grep/rules

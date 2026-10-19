@@ -1,0 +1,260 @@
+//! GUI projection of the two persisted thumb-wheel direction bindings.
+//!
+//! Configuration remains backward-compatible: the picker writes the existing
+//! `ThumbwheelScrollDown` and `ThumbwheelScrollUp` entries. This module only
+//! groups exact pairs into the presets displayed by the mouse diagram.
+
+use openhid_core::binding::Action;
+
+/// Actions fired when the thumb wheel moves backward/down and forward/up.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ThumbwheelPair {
+    pub backward: Action,
+    pub forward: Action,
+}
+
+/// Paired actions exposed by the thumb-wheel picker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ThumbwheelPreset {
+    BackForward,
+    UndoRedo,
+    BrowserHistory,
+    Tabs,
+    Desktops,
+    DesktopsReversed,
+    Tracks,
+    Volume,
+    VolumeReversed,
+    CycleDpi,
+    VerticalScroll,
+    VerticalScrollReversed,
+    HorizontalScroll,
+    HorizontalScrollReversed,
+}
+
+impl ThumbwheelPreset {
+    pub(crate) const ALL: [Self; 14] = [
+        Self::BackForward,
+        Self::UndoRedo,
+        Self::BrowserHistory,
+        Self::Tabs,
+        Self::Desktops,
+        Self::DesktopsReversed,
+        Self::Tracks,
+        Self::Volume,
+        Self::VolumeReversed,
+        Self::CycleDpi,
+        Self::VerticalScroll,
+        Self::VerticalScrollReversed,
+        Self::HorizontalScroll,
+        Self::HorizontalScrollReversed,
+    ];
+
+    #[must_use]
+    pub(crate) fn pair(self) -> ThumbwheelPair {
+        let (backward, forward) = match self {
+            Self::BackForward => (Action::MouseBack, Action::MouseForward),
+            Self::UndoRedo => (Action::Undo, Action::Redo),
+            Self::BrowserHistory => (Action::BrowserBack, Action::BrowserForward),
+            Self::Tabs => (Action::PrevTab, Action::NextTab),
+            Self::Desktops => (Action::PreviousDesktop, Action::NextDesktop),
+            Self::DesktopsReversed => (Action::NextDesktop, Action::PreviousDesktop),
+            Self::Tracks => (Action::PrevTrack, Action::NextTrack),
+            Self::Volume => (Action::VolumeDown, Action::VolumeUp),
+            Self::VolumeReversed => (Action::VolumeUp, Action::VolumeDown),
+            Self::CycleDpi => (Action::CycleDpiPresets, Action::CycleDpiPresets),
+            Self::VerticalScroll => (Action::ScrollDown, Action::ScrollUp),
+            Self::VerticalScrollReversed => (Action::ScrollUp, Action::ScrollDown),
+            // The plain pair must equal the native-direction defaults so
+            // picking it never diverts the wheel; the reversed pair is the
+            // swap, which diverts and injects the opposite direction.
+            Self::HorizontalScroll => (Action::HorizontalScrollRight, Action::HorizontalScrollLeft),
+            Self::HorizontalScrollReversed => {
+                (Action::HorizontalScrollLeft, Action::HorizontalScrollRight)
+            }
+        };
+        ThumbwheelPair { backward, forward }
+    }
+
+    /// Recognize only an exact approved pair. Mixed or reversed bindings stay
+    /// `Custom` in the UI until the user selects a preset.
+    #[must_use]
+    pub(crate) fn recognize(backward: &Action, forward: &Action) -> Option<Self> {
+        Self::ALL.into_iter().find(|preset| {
+            let pair = preset.pair();
+            pair.backward.eq(backward) && pair.forward.eq(forward)
+        })
+    }
+
+    #[must_use]
+    pub(crate) const fn translation_key(self) -> &'static str {
+        match self {
+            Self::BackForward => "pointer.back_forward",
+            Self::UndoRedo => "pointer.undo_redo",
+            Self::BrowserHistory => "pointer.browser_back_forward",
+            Self::Tabs => "pointer.previous_next_tab",
+            Self::Desktops => "pointer.previous_next_desktop",
+            Self::DesktopsReversed => "pointer.next_previous_desktop",
+            Self::Tracks => "pointer.previous_next_track",
+            // `Self::Volume` is the intuitive pairing (rolling the wheel up
+            // raises the volume — see `pair()` above), so it takes the label a
+            // user reads that way, "Volume Up / Down"; `VolumeReversed` gets
+            // the other wording, matching the actual inverted direction it
+            // configures.
+            Self::Volume => "pointer.volume_up_down",
+            Self::VolumeReversed => "pointer.volume_down_up",
+            Self::CycleDpi => "pointer.cycle_dpi_presets",
+            Self::VerticalScroll => "pointer.vertical_scroll",
+            Self::VerticalScrollReversed => "pointer.vertical_scroll_reversed",
+            Self::HorizontalScroll => "pointer.horizontal_scroll",
+            Self::HorizontalScrollReversed => "pointer.horizontal_scroll_reversed",
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn icon(self) -> &'static str {
+        match self {
+            Self::BackForward => "action-icons/circle-arrow-right.svg",
+            Self::UndoRedo => "action-icons/redo-2.svg",
+            Self::BrowserHistory => "action-icons/arrow-right.svg",
+            Self::Tabs => "action-icons/chevron-right.svg",
+            Self::Desktops | Self::DesktopsReversed => "action-icons/square-arrow-right.svg",
+            Self::Tracks => "action-icons/skip-forward.svg",
+            Self::Volume | Self::VolumeReversed => "action-icons/volume-2.svg",
+            Self::CycleDpi => "action-icons/gauge.svg",
+            Self::VerticalScroll | Self::VerticalScrollReversed => "action-icons/chevrons-up.svg",
+            Self::HorizontalScroll | Self::HorizontalScrollReversed => {
+                "action-icons/chevrons-right.svg"
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use openhid_core::binding::{ButtonId, default_binding};
+
+    use super::*;
+
+    #[test]
+    fn presets_map_backward_and_forward_in_physical_direction() {
+        let expected = [
+            (Action::MouseBack, Action::MouseForward),
+            (Action::Undo, Action::Redo),
+            (Action::BrowserBack, Action::BrowserForward),
+            (Action::PrevTab, Action::NextTab),
+            (Action::PreviousDesktop, Action::NextDesktop),
+            (Action::NextDesktop, Action::PreviousDesktop),
+            (Action::PrevTrack, Action::NextTrack),
+            (Action::VolumeDown, Action::VolumeUp),
+            (Action::VolumeUp, Action::VolumeDown),
+            (Action::CycleDpiPresets, Action::CycleDpiPresets),
+            (Action::ScrollDown, Action::ScrollUp),
+            (Action::ScrollUp, Action::ScrollDown),
+            (Action::HorizontalScrollRight, Action::HorizontalScrollLeft),
+            (Action::HorizontalScrollLeft, Action::HorizontalScrollRight),
+        ];
+
+        assert_eq!(expected.len(), ThumbwheelPreset::ALL.len());
+        for (preset, (backward, forward)) in ThumbwheelPreset::ALL.into_iter().zip(expected) {
+            assert_eq!(preset.pair(), ThumbwheelPair { backward, forward });
+        }
+    }
+
+    #[test]
+    fn horizontal_scroll_presets_follow_native_defaults() {
+        let native = ThumbwheelPreset::HorizontalScroll.pair();
+        assert_eq!(
+            native.backward,
+            default_binding(ButtonId::ThumbwheelScrollDown),
+            "backward must stay the native down default so the plain preset does not divert"
+        );
+        assert_eq!(
+            native.forward,
+            default_binding(ButtonId::ThumbwheelScrollUp),
+            "forward must stay the native up default so the plain preset does not divert"
+        );
+
+        let reversed = ThumbwheelPreset::HorizontalScrollReversed.pair();
+        assert_eq!(reversed.backward, native.forward);
+        assert_eq!(reversed.forward, native.backward);
+        assert_eq!(
+            ThumbwheelPreset::recognize(&reversed.backward, &reversed.forward),
+            Some(ThumbwheelPreset::HorizontalScrollReversed)
+        );
+    }
+
+    #[test]
+    fn desktop_preset_labels_match_the_direction_they_actually_configure() {
+        // Rolling the wheel down fires `backward` and up fires `forward`; the
+        // label names the down action first, as the plain preset does.
+        for (preset, key) in [
+            (ThumbwheelPreset::Desktops, "pointer.previous_next_desktop"),
+            (
+                ThumbwheelPreset::DesktopsReversed,
+                "pointer.next_previous_desktop",
+            ),
+        ] {
+            let pair = preset.pair();
+            assert_eq!(preset.translation_key(), key);
+            assert_eq!(
+                pair.backward == Action::PreviousDesktop,
+                key == "pointer.previous_next_desktop",
+                "{preset:?}: label must name the down action first"
+            );
+        }
+        let plain = ThumbwheelPreset::Desktops.pair();
+        let reversed = ThumbwheelPreset::DesktopsReversed.pair();
+        assert_eq!(reversed.backward, plain.forward);
+        assert_eq!(reversed.forward, plain.backward);
+    }
+
+    #[test]
+    fn volume_preset_labels_match_the_direction_they_actually_configure() {
+        // The label must read the way the wheel actually behaves — whichever
+        // preset's `forward` (rolling the wheel up) raises the volume is the
+        // one a user expects "Up" to come first for.
+        for preset in [ThumbwheelPreset::Volume, ThumbwheelPreset::VolumeReversed] {
+            let pair = preset.pair();
+            let reads_up_first = preset.translation_key() == "pointer.volume_up_down";
+            assert_eq!(
+                pair.forward == Action::VolumeUp,
+                reads_up_first,
+                "{preset:?}: label must say \"Up\" first exactly when rolling up raises the volume"
+            );
+        }
+    }
+
+    #[test]
+    fn recognition_requires_an_exact_approved_pair() {
+        for preset in ThumbwheelPreset::ALL {
+            let pair = preset.pair();
+            assert_eq!(
+                ThumbwheelPreset::recognize(&pair.backward, &pair.forward),
+                Some(preset)
+            );
+        }
+
+        assert_eq!(
+            ThumbwheelPreset::recognize(&Action::NextTab, &Action::PrevTab),
+            None,
+            "reversed directions are custom"
+        );
+        assert_eq!(
+            ThumbwheelPreset::recognize(&Action::VolumeDown, &Action::NextTrack),
+            None,
+            "mixed actions are custom"
+        );
+    }
+
+    #[test]
+    fn cycle_dpi_uses_the_same_action_in_both_directions() {
+        assert_eq!(
+            ThumbwheelPreset::CycleDpi.pair(),
+            ThumbwheelPair {
+                backward: Action::CycleDpiPresets,
+                forward: Action::CycleDpiPresets,
+            }
+        );
+    }
+}

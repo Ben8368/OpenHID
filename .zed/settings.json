@@ -1,0 +1,21 @@
+{
+  "load_direnv": "direct",
+  "languages": {
+    "Rust": {
+      "format_on_save": "on",
+      "formatter": "language_server"
+    }
+  },
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "check": {
+          "command": "clippy"
+        },
+        "rustfmt": {
+          "extraArgs": ["--config-path", "rustfmt.toml"]
+        }
+      }
+    }
+  }
+}

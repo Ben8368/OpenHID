@@ -1,0 +1,113 @@
+//! Unit tests for `Crown` mode parsing and event decoding.
+
+use std::assert_matches;
+
+use super::event::{
+    ActivityState, ButtonState, CrownEvent, CrownGesture, RotationState, decode_event,
+};
+use super::{CrownMode, RatchetMode, ReportingMode};
+
+#[test]
+fn parses_mode() {
+    let mut payload = [0; 16];
+    payload[0] = 2; // Diverted
+    payload[1] = 2; // Ratchet
+    payload[2] = 0x10;
+    payload[3] = 0x20;
+    payload[4] = 0x05;
+
+    let mode = CrownMode::from_payload(&payload).unwrap();
+    assert_eq!(mode.diverting, ReportingMode::Diverted);
+    assert_eq!(mode.ratchet_mode, RatchetMode::Ratchet);
+    assert_eq!(mode.rotation_timeout, 0x10);
+    assert_eq!(mode.short_long_timeout, 0x20);
+    assert_eq!(mode.double_tap_speed, 0x05);
+}
+
+#[test]
+fn rejects_unknown_mode_value() {
+    let mut payload = [0; 16];
+    payload[0] = 9;
+
+    assert_matches!(
+        CrownMode::from_payload(&payload),
+        Err(crate::protocol::v20::Hidpp20Error::UnsupportedResponse)
+    );
+}
+
+#[test]
+fn rejects_the_write_only_sentinel_in_a_response() {
+    // `0` is the request-side "leave unchanged" sentinel; a device answering
+    // it as the current mode is as unsupported as any unknown value.
+    let payload = [0; 16];
+
+    assert_matches!(
+        CrownMode::from_payload(&payload),
+        Err(crate::protocol::v20::Hidpp20Error::UnsupportedResponse)
+    );
+}
+
+#[test]
+fn decodes_crown_event_with_signed_fields() {
+    let mut payload = [0; 16];
+    payload[0] = 1; // Start
+    payload[1] = 0xfb; // -5 slots
+    payload[2] = 0x03; // +3 ratchets
+    payload[3] = 2; // proximity Active
+    payload[4] = 1; // touch Start
+    payload[5] = 1; // Tap
+    payload[6] = 3; // LongPress
+    payload[14..16].copy_from_slice(&(-200i16).to_be_bytes());
+
+    let CrownEvent::Update(update) = decode_event(0, &payload).unwrap();
+    assert_eq!(update.rotation_state, RotationState::Start);
+    assert_eq!(update.relative_slot_rotation, -5);
+    assert_eq!(update.relative_ratchet_rotation, 3);
+    assert_eq!(update.proximity, ActivityState::Active);
+    assert_eq!(update.touch, ActivityState::Start);
+    assert_eq!(update.gesture, CrownGesture::Tap);
+    assert_eq!(update.button, ButtonState::LongPress);
+    assert_eq!(update.speed, -200);
+}
+
+#[test]
+fn ignores_unknown_event_sub_id() {
+    assert!(decode_event(1, &[0; 16]).is_none());
+}
+
+#[test]
+fn keeps_event_with_unknown_enum_field() {
+    let mut payload = [0; 16];
+    payload[1] = 0xfb; // -5 slots — a valid sibling field that must survive
+    payload[6] = 0x09; // out-of-range button state
+    let CrownEvent::Update(update) = decode_event(0, &payload).expect("event kept");
+    assert_eq!(update.button, ButtonState::Other(0x09));
+    assert_eq!(update.relative_slot_rotation, -5);
+}
+
+/// Totality: for a known sub-id, no single field byte value may drop the whole
+/// event. Sweeps every value of each enum-typed field position.
+#[test]
+fn known_sub_id_survives_any_field_byte() {
+    for byte in 0..=u8::MAX {
+        for pos in [0usize, 3, 4, 5, 6] {
+            let mut payload = [0; 16];
+            payload[1] = 0xfb; // sibling that must always survive
+            payload[pos] = byte;
+            let CrownEvent::Update(update) = decode_event(0, &payload)
+                .unwrap_or_else(|| panic!("dropped event for payload[{pos}]={byte:#04x}"));
+            assert_eq!(
+                update.relative_slot_rotation, -5,
+                "sibling lost for payload[{pos}]={byte:#04x}"
+            );
+        }
+    }
+}
+
+#[test]
+fn maps_mode_enum_wire_values() {
+    assert_eq!(u8::from(ReportingMode::Diverted), 2);
+    assert_eq!(ReportingMode::try_from(1u8).unwrap(), ReportingMode::Hid);
+    assert_eq!(u8::from(RatchetMode::Free), 1);
+    RatchetMode::try_from(3u8).unwrap_err();
+}

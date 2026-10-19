@@ -1,0 +1,31 @@
+[package]
+name = "openhid-agent-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Headless orchestration shared by the OpenHID background agent: hook runtime, HID++ writes, DPI cycle, Actions Ring session state."
+# Links path-only siblings and is bundled inside the .app via openhid-agent.
+publish = false
+
+[dependencies]
+axwatch = { workspace = true }
+openhid-core = { path = "../openhid-core", features = ["worker"] }
+openhid-inject = { path = "../openhid-inject" }
+openhid-hid = { path = "../openhid-hid" }
+openhid-hook = { path = "../openhid-hook" }
+openhid-ipc = { path = "../openhid-ipc" }
+futures-lite = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# Only to advance virtual time in the DeviceOp/timed timeout test without a
+# real multi-second sleep.
+openhid-fixture = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["test-util"] }

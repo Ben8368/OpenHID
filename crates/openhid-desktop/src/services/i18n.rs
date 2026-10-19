@@ -1,0 +1,39 @@
+//! Settings-app localization.
+//!
+//! Translations live in `crates/openhid-ui/locales/*.toml` and are loaded at
+//! compile time by the `rust_i18n::i18n!` macro in `main.rs` (fallback `"en"`).
+//! **`en.toml` is the English source of truth**. Stable semantic keys are
+//! shared by every locale, so English copy can change without changing message
+//! identity. New messages must land in **every** `locales/*.toml` in the same
+//! change — `openhid-ui`'s parity test enforces a key-for-key match. Crowdin
+//! improves non-English values over time and the workflow downloads only real
+//! translations (`skip_untranslated_strings`). Call sites use
+//! `tr!` (declared in `main.rs`) / `rust_i18n::t!` with product-domain keys such as
+//! `device.connected`. Missing keys render as the key, so catalogs must not lag.
+//!
+//! The current locale is a process-global atomic inside `rust_i18n`. Setting it
+//! re-localizes both our own call sites *and* gpui-component's built-in widget
+//! strings, since the framework reads the same global. Apply it once at startup
+//! via [`apply`] and on a live switch via
+//! [`AppState::commit_language`](crate::state::AppState::commit_language); each must be
+//! followed by a window refresh so open views re-render with the new locale.
+//!
+//! Which catalog a BCP-47 code resolves to is decided in
+//! [`openhid_core::locale`], shared with the overlay helper.
+
+use openhid_core::config::AppSettings;
+use openhid_core::locale::activate;
+
+/// Serializes tests that mutate `rust_i18n`'s process-global locale, so a
+/// locale switch in one test cannot interleave with another's assertions.
+#[cfg(test)]
+pub(crate) static LOCALE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Apply the configured language to the process-global locale at startup.
+/// Safe to call before any window opens — the locale is a plain atomic.
+pub fn apply(settings: &AppSettings) {
+    activate(settings.language.as_deref());
+}
+
+#[cfg(test)]
+mod tests;

@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=OpenHID
+Comment=Logitech HID++ device control — remap buttons, DPI, SmartShift
+Comment[es]=Control de dispositivos Logitech HID++: reasignación de botones, DPI y SmartShift
+Exec=openhid-desktop
+Icon=openhid
+Terminal=false
+# Ties the running window (Wayland xdg-toplevel app_id / X11 WM_CLASS) back to
+# this launcher so GNOME groups it under the OpenHID icon instead of a generic
+# one. Must match `openhid_core::brand::APP_ID`, the value the GUI advertises.
+StartupWMClass=org.openhid.openhid
+Categories=Settings;HardwareSettings;
+Keywords=logitech;mouse;hid;remap;dpi;
+StartupNotify=true

@@ -1,0 +1,353 @@
+//! `openhid diag` — real-device smoke tests for the HID++ write path.
+//!
+//! Subcommands exercise direct HID++ reads and verified writes. The intent is
+//! diagnosis, not persistent configuration: nothing here
+//! touches `config.toml` or talks to the GUI; everything runs through the
+//! same `openhid_hid` API the GPUI app uses, so a green diag means the
+//! GUI's write path works on this host.
+
+use anyhow::{Result, anyhow};
+use clap::Subcommand;
+use openhid_core::device::DeviceInventory;
+use openhid_hid::{DeviceRoute, dump_features};
+
+pub mod battery;
+pub mod controls;
+pub mod dpi;
+pub mod features;
+pub mod lighting;
+pub mod pointer_speed;
+pub mod smartshift;
+pub mod wheel;
+
+#[derive(Debug, Subcommand)]
+pub enum DiagCmd {
+    /// Dump every HID++ feature the active device reports.
+    Features(features::FeaturesArgs),
+    /// Dump HID++ 0x1b04 reprogrammable controls and capability flags.
+    Controls(controls::ControlsArgs),
+    /// Read the raw battery report (0x1004, 0x1000, or 0x1F20 fields).
+    Battery(battery::BatteryArgs),
+    /// Read DPI → write a small delta → read back → restore → report.
+    Dpi(dpi::DpiArgs),
+    /// Read SmartShift mode → toggle → read back → toggle back → report.
+    Smartshift(smartshift::SmartshiftArgs),
+    /// Set an online RGB device to a solid colour (e.g. `ff0000` for red).
+    Lighting(lighting::LightingArgs),
+    /// Read or set the HID++ 0x2121 wheel reporting resolution.
+    Wheel(wheel::WheelArgs),
+    /// Read 0x2205 pointer scaling → write a test value → read back → restore.
+    PointerSpeed(pointer_speed::PointerSpeedArgs),
+}
+
+impl DiagCmd {
+    pub async fn run(self) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        request_input_monitoring().await?;
+
+        match self {
+            Self::Features(args) => features::run(args).await,
+            Self::Controls(args) => controls::run(args).await,
+            Self::Battery(args) => battery::run(args).await,
+            Self::Dpi(args) => dpi::run(args).await,
+            Self::Smartshift(args) => smartshift::run(args).await,
+            Self::Lighting(args) => lighting::run(args).await,
+            Self::Wheel(args) => wheel::run(args).await,
+            Self::PointerSpeed(args) => pointer_speed::run(args).await,
+        }
+    }
+}
+
+/// Raise the macOS Input Monitoring consent dialog before any `diag`
+/// subcommand opens a device directly, mirroring the agent's own gate
+/// (`openhid_agent::lifecycle::request_input_monitoring`).
+///
+/// Without this, `IOHIDDeviceOpen` is silently denied and this binary's own
+/// Input Monitoring row never appears in System Settings at all for a user
+/// to grant — `has_access()` only ever answers `false`, forever, for a
+/// process that never once called the prompting API. Confirmed live on
+/// `diag controls` (#1213): a device already granted to the packaged
+/// `OpenHID Agent` helper still failed to open here, because Input
+/// Monitoring is granted per exact signed binary — a grant to the agent
+/// does nothing for this separate one.
+#[cfg(target_os = "macos")]
+async fn request_input_monitoring() -> Result<()> {
+    if openhid_hid::permissions::has_access() {
+        return Ok(());
+    }
+    tokio::task::spawn_blocking(openhid_hid::permissions::request_access)
+        .await
+        .map_err(|e| anyhow!("Input Monitoring permission request task failed: {e}"))?;
+    // A grant (or an existing denial) is never visible to this same
+    // process — macOS only updates a process's cached answer on its next
+    // launch, the same reason the agent relaunches itself after a fresh
+    // grant. A one-shot CLI command has no equivalent to relaunch into, so
+    // there is nothing to continue with here regardless of what the user
+    // just chose.
+    Err(anyhow!(
+        "Input Monitoring is not granted to `openhid` — check System Settings → \
+         Privacy & Security → Input Monitoring (a fresh grant needs this command \
+         run again to take effect) and try again"
+    ))
+}
+
+/// One online, paired device discovered during enumeration, already resolved to
+/// the [`DeviceRoute`] needed to talk to it. Builds a Bolt route when the device
+/// is behind a receiver, a direct route otherwise (USB cable / Bluetooth).
+struct Candidate {
+    route: DeviceRoute,
+    name: String,
+}
+
+/// Enumerate inventories and resolve every *online* paired device to a route.
+async fn online_devices() -> Result<Vec<Candidate>> {
+    let inventories = openhid_hid::enumerate().await?;
+    let mut out = Vec::new();
+    for inventory in &inventories {
+        out.extend(online_candidates(inventory));
+    }
+    Ok(out)
+}
+
+fn online_candidates(inventory: &DeviceInventory) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+    for paired in inventory.paired.iter().filter(|paired| paired.online) {
+        if let Some(route) = DeviceRoute::for_slot(inventory, paired.slot) {
+            let name = paired
+                .codename
+                .clone()
+                .unwrap_or_else(|| format!("Slot {}", paired.slot));
+            candidates.push(Candidate { route, name });
+        } else {
+            tracing::warn!(
+                receiver = %inventory.receiver.name,
+                slot = paired.slot,
+                "skipping online device without a resolvable route"
+            );
+        }
+    }
+    candidates
+}
+
+/// Build a helpful "couldn't pick a device" error that lists what *is* online.
+fn no_match_err(devices: &[Candidate], query: Option<&str>) -> anyhow::Error {
+    if devices.is_empty() {
+        return anyhow!("no online HID++ device found — is a Logi device paired and awake?");
+    }
+    let list = devices
+        .iter()
+        .map(|c| format!("    - {} ({})", c.name, c.route))
+        .collect::<Vec<_>>()
+        .join("\n");
+    match query {
+        Some(q) => anyhow!("no online device matches `--device {q}`.\n  online devices:\n{list}"),
+        None => anyhow!(
+            "could not pick a device automatically.\n  online devices:\n{list}\n  \
+             pass --device <name> to choose one."
+        ),
+    }
+}
+
+/// Pick the device a diag should run against.
+///
+/// Selection order:
+/// 1. If `query` is set, the first online device whose name contains it
+///    (case-insensitive) — lets the user disambiguate explicitly.
+/// 2. Else, if `required_features` is non-empty, the first online device whose
+///    HID++ feature table exposes *any* of them. This is what stops a
+///    mouse-only diag (DPI, SmartShift) from picking a paired keyboard when
+///    several devices are online — a real hazard on Bluetooth-direct setups
+///    where each device enumerates as its own inventory.
+/// 3. Else, the first online device (the original behaviour).
+pub(crate) async fn select_device(
+    query: Option<&str>,
+    required_features: &[u16],
+) -> Result<(DeviceRoute, String)> {
+    let devices = online_devices().await?;
+
+    if let Some(q) = query {
+        let needle = q.to_lowercase();
+        return devices
+            .iter()
+            .find(|c| c.name.to_lowercase().contains(&needle))
+            .map(|c| (c.route.clone(), c.name.clone()))
+            .ok_or_else(|| no_match_err(&devices, query));
+    }
+
+    if !required_features.is_empty() {
+        for c in &devices {
+            match dump_features(&c.route).await {
+                Ok(entries) => {
+                    if entries.iter().any(|e| required_features.contains(&e.id)) {
+                        return Ok((c.route.clone(), c.name.clone()));
+                    }
+                }
+                Err(e) => {
+                    // Sleepy/offline devices can fail legitimately; log so the
+                    // silent fallthrough is visible if a healthy device is skipped.
+                    tracing::warn!(
+                        "skipping {} ({}): feature probe failed: {e:#}",
+                        c.name,
+                        c.route
+                    );
+                }
+            }
+        }
+        // None advertised the feature — fall through to first-online so the
+        // caller's own "device does not expose feature 0x….." error still
+        // fires against a concrete device.
+    }
+
+    devices
+        .into_iter()
+        .next()
+        .map(|c| (c.route, c.name))
+        .ok_or_else(|| no_match_err(&[], None))
+}
+
+#[cfg(test)]
+mod tests {
+    use openhid_core::device::{
+        Capabilities, DeviceInventory, DeviceKind, PairedDevice, ReceiverInfo,
+    };
+    use openhid_hid::{DIRECT_DEVICE_INDEX, DeviceRoute};
+
+    use super::{Candidate, no_match_err, online_candidates};
+
+    fn candidate(name: &str) -> Candidate {
+        Candidate {
+            route: DeviceRoute::Direct {
+                vendor_id: 0x046d,
+                product_id: 0xc539,
+            },
+            name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn no_devices_at_all_gives_a_generic_not_found_message() {
+        let err = no_match_err(&[], None).to_string();
+        assert_eq!(
+            err,
+            "no online HID++ device found — is a Logi device paired and awake?"
+        );
+    }
+
+    #[test]
+    fn no_devices_at_all_ignores_a_query_and_still_uses_the_generic_message() {
+        // `devices.is_empty()` short-circuits before `query` is inspected.
+        let err = no_match_err(&[], Some("mouse")).to_string();
+        assert_eq!(
+            err,
+            "no online HID++ device found — is a Logi device paired and awake?"
+        );
+    }
+
+    #[test]
+    fn unmatched_query_names_the_query_and_lists_online_devices() {
+        let devices = vec![candidate("MX Master 3S"), candidate("G Pro")];
+        let err = no_match_err(&devices, Some("keyboard")).to_string();
+
+        assert!(err.contains("no online device matches `--device keyboard`"));
+        assert!(err.contains("MX Master 3S"));
+        assert!(err.contains("G Pro"));
+    }
+
+    #[test]
+    fn no_query_suggests_the_device_flag_and_lists_online_devices() {
+        let devices = vec![candidate("MX Master 3S")];
+        let err = no_match_err(&devices, None).to_string();
+
+        assert!(err.contains("could not pick a device automatically"));
+        assert!(err.contains("pass --device <name> to choose one"));
+        assert!(err.contains("MX Master 3S"));
+    }
+
+    #[test]
+    fn unresolved_receiver_route_is_ignored() {
+        let inventory = inventory(0xc547, None, vec![paired(2, "G502 X Plus", true)]);
+
+        assert!(online_candidates(&inventory).is_empty());
+    }
+
+    #[test]
+    fn receiver_route_retains_uid_and_slot() {
+        let inventory = inventory(
+            0xc547,
+            Some("receiver-uid"),
+            vec![paired(4, "G502 X Plus", true)],
+        );
+        let candidates = online_candidates(&inventory);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].name, "G502 X Plus");
+        assert_eq!(
+            candidates[0].route,
+            DeviceRoute::Unifying {
+                receiver_uid: "receiver-uid".into(),
+                slot: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn direct_route_retains_direct_device_index() {
+        let inventory = inventory(
+            0xc095,
+            None,
+            vec![paired(DIRECT_DEVICE_INDEX, "G502 X Plus", true)],
+        );
+        let candidates = online_candidates(&inventory);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].route,
+            DeviceRoute::Direct {
+                vendor_id: 0x046d,
+                product_id: 0xc095,
+            }
+        );
+        assert_eq!(candidates[0].route.device_index(), DIRECT_DEVICE_INDEX);
+    }
+
+    #[test]
+    fn offline_device_is_ignored() {
+        let inventory = inventory(
+            0xc547,
+            Some("receiver-uid"),
+            vec![paired(2, "G502 X Plus", false)],
+        );
+
+        assert!(online_candidates(&inventory).is_empty());
+    }
+
+    fn inventory(
+        product_id: u16,
+        unique_id: Option<&str>,
+        paired: Vec<PairedDevice>,
+    ) -> DeviceInventory {
+        DeviceInventory {
+            receiver: ReceiverInfo {
+                name: "Test device".into(),
+                vendor_id: 0x046d,
+                product_id,
+                unique_id: unique_id.map(str::to_string),
+            },
+            paired,
+        }
+    }
+
+    fn paired(slot: u8, name: &str, online: bool) -> PairedDevice {
+        PairedDevice {
+            slot,
+            codename: Some(name.into()),
+            wpid: None,
+            kind: DeviceKind::Mouse,
+            online,
+            battery: None,
+            model_info: None,
+            capabilities: Some(Capabilities::default()),
+            settings_revision: 0,
+        }
+    }
+}

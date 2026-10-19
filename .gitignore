@@ -1,0 +1,80 @@
+# Devenv
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+
+# direnv
+.direnv
+
+# Added by cargo
+
+/target
+
+# Local reference clone of external-reference — studied for architecture,
+# never copied or vendored. Cloned at the project root for convenience.
+/local-reference/
+
+# Track the orb lifecycle, shared rules, and curated project skills. Other agent state
+# and skills stay local. Keep parent directories visible for these exceptions.
+/.agents/*
+!/.agents/resume
+!/.agents/setup
+!/.agents/rules/
+!/.agents/skills/
+/.agents/skills/*
+!/.agents/skills/gpui-kit/
+!/.agents/skills/gpui-kit-design-guides/
+!/.agents/skills/testing-openhid-ui/
+!/.agents/skills/diagnosing-openhid-devices/
+!/.agents/skills/verifying-openhid-changes/
+!/.agents/skills/contributing-device-fixtures/
+!/.agents/skills/LICENSE-APACHE
+!/.agents/skills/ast-grep/
+!/.agents/skills/LICENSE-MIT-ast-grep
+
+# Local planning docs — kept on disk, never committed.
+/UI.md
+/PLAN.md
+
+# Local git worktrees (`git worktree add .worktrees/<slug>`).
+.worktrees/
+
+# Claude Code worktrees, transcripts, local settings — per-developer state.
+# Track only the rules symlink here; shared rule files live in .agents/rules/.
+/.claude/*
+!/.claude/rules
+# Project skills are named explicitly and tracked; everything else under
+# .claude/skills/ is the per-developer symlink farm into .agents/skills/.
+!/.claude/skills/
+/.claude/skills/*
+!/.claude/skills/openhid-macos-permissions/
+!/.claude/skills/gpui-kit
+!/.claude/skills/gpui-kit-design-guides
+!/.claude/skills/testing-openhid-ui
+!/.claude/skills/diagnosing-openhid-devices
+!/.claude/skills/verifying-openhid-changes
+!/.claude/skills/contributing-device-fixtures
+!/.claude/skills/ast-grep
+
+# Node dependencies for the JS helper scripts under .github/scripts/.
+node_modules/
+
+# macOS finder metadata
+.DS_Store
+
+# Compiled icons — `cargo xtask macos icon` rebuilds them from the Icon
+# Composer documents in `design/icon` on every bundle build. `AppIcon.icns` is
+# the exception: `cargo bundle` reads it straight from the manifest, so it stays
+# tracked and a plain `cargo bundle` still produces an app with an icon.
+/crates/openhid-desktop/icon/*.icns
+!/crates/openhid-desktop/icon/AppIcon.icns
+/crates/openhid-desktop/icon/Assets.car
+/crates/openhid-desktop/icon/previews/
+
+# Packaging output.
+*.dmg
+
+# flatpak-builder output and scratch state.
+/.flatpak-builder/
+/build/
+/repo/

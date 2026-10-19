@@ -1,0 +1,21 @@
+[package]
+name = "openhid-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Presentation code shared by the OpenHID settings app and its Actions Ring overlay helper."
+# Internal presentation crate, distributed with the desktop and overlay.
+publish = false
+
+[dependencies]
+openhid-core = { path = "../openhid-core" }
+# `gpui` only — deliberately neither `gpui-component` nor its icon set. Every
+# dependency added here lands in the overlay helper too, so the widget kit and
+# the artwork only the app draws both stay on the app's side.
+gpui = { workspace = true }
+
+[lints]
+workspace = true

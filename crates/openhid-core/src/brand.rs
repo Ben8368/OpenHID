@@ -1,0 +1,487 @@
+//! Brand constants shared across the workspace: the project's public URLs,
+//! the `openhid://` deep-link command vocabulary, the three processes' bundle
+//! identifiers, and the app bundle's layout — where the helpers live and what
+//! they are called on disk.
+//!
+//! All of it lives here, in the platform-free core crate, so the agent (which
+//! *emits* tray deep links and finds the overlay), the GUI (which *parses* the
+//! deep links and finds the agent), and the packaging tooling share a single
+//! source of truth: the command names can't drift across the process boundary,
+//! a helper is looked up at runtime by the name packaging gave it, and a rename
+//! touches one file.
+
+use std::path::Path;
+
+/// The OpenHID GitHub repository.
+pub const REPO_URL: &str = "https://github.com/Ben8368/OpenHID";
+/// The original project from which OpenHID is derived.
+pub const UPSTREAM_URL: &str = "https://github.com/AprilNEA/OpenLogi";
+/// The README, used as the in-app "Help" link.
+pub const HELP_URL: &str = "https://github.com/Ben8368/OpenHID#readme";
+/// The "latest release" page.
+pub const RELEASES_URL: &str = "https://github.com/Ben8368/OpenHID/releases/latest";
+
+/// The application identifier: the Wayland xdg-toplevel `app_id` (and X11
+/// `WM_CLASS`) the GUI advertises, the root of the macOS bundle-id family
+/// (`org.openhid.agent`, `org.openhid.openhid-dev`), and the value the Linux
+/// `.desktop` file pins as `StartupWMClass`. Defined once here so the window the
+/// compositor sees, the launcher that groups it, and the frontmost backend that
+/// self-identifies OpenHID can never disagree. The `.desktop` file carries its
+/// own literal copy (it can't reference Rust) — keep the two in sync.
+pub const APP_ID: &str = "org.openhid.openhid";
+
+/// The always-on agent's bundle identifier — the process that owns the hook and
+/// holds the Accessibility grant, shipped as a nested login item.
+pub const AGENT_ID: &str = "org.openhid.agent";
+
+/// The Actions Ring overlay's bundle identifier, the second nested login item.
+pub const OVERLAY_ID: &str = "org.openhid.overlay";
+
+/// The agent's macOS launchd service label: the `Label` in the app bundle's
+/// embedded `Contents/Library/LaunchAgents/<label>.plist`, what `SMAppService`
+/// registers, and the name `launchctl` addresses (`gui/<uid>/<label>`). Dev
+/// bundles use [`dev_id`] of this, so a dev registration can never collide
+/// with the shipped one.
+///
+/// A launchd label is a *namespace key*, not a TCC identity — deliberately not
+/// [`AGENT_ID`], although the two look related: `org.openhid.agent` is the
+/// frozen label of the legacy hand-written `~/Library/LaunchAgents` plist
+/// (see `openhid-agent/src/autostart/macos.rs`), and reusing a legacy label
+/// would make the migration's "is this job ours or the old file's?" question
+/// unanswerable. Once shipped, this value is frozen the same way: renaming it
+/// orphans the registration users already approved in Login Items.
+pub const AGENT_SERVICE_LABEL: &str = "org.openhid.agent.service";
+
+/// What a dev build appends to every identifier above, so a local build can
+/// never claim a shipped TCC grant and System Settings shows which of the two
+/// installed copies a row belongs to.
+const DEV_SUFFIX: &str = "-dev";
+
+/// `id`'s dev-channel counterpart.
+///
+/// Packaging (`cargo xtask macos`) stamps the result into every `Info.plist`;
+/// the agent matches running GUI processes against it. Defined here so the
+/// identity a dev bundle carries and the identity anything looks for cannot
+/// diverge.
+#[must_use]
+pub fn dev_id(id: &str) -> String {
+    format!("{id}{DEV_SUFFIX}")
+}
+
+/// The app's display name: the outer bundle's `CFBundleName` and
+/// `CFBundleDisplayName`, and the root the helpers' names are formed from.
+pub const APP_NAME: &str = "OpenHID";
+
+/// The GUI's executable, as cargo builds it and as the macOS bundle and the
+/// Linux packages ship it. The helpers' executables are [`Helper::executable`].
+pub const GUI_EXECUTABLE: &str = "openhid-desktop";
+
+/// The CLI's executable — the command users type, so it never changes. The
+/// Windows installer ships the GUI under the same name in another case
+/// (`OpenHID.exe`), which the case-insensitive match below covers.
+pub const CLI_EXECUTABLE: &str = "openhid";
+
+/// `name`'s dev-channel counterpart, the way [`dev_id`] is for identifiers:
+/// what System Settings shows for a local build's bundle, and the directory a
+/// dev helper lives in.
+#[must_use]
+pub fn dev_name(name: &str) -> String {
+    format!("{name} Dev")
+}
+
+/// Where the app bundle nests its login-item helpers, relative to its root.
+pub const LOGIN_ITEMS_DIR: &str = "Contents/Library/LoginItems";
+
+/// Where the app bundle carries the agent's launchd service plist, relative
+/// to its root.
+pub const LAUNCH_AGENTS_DIR: &str = "Contents/Library/LaunchAgents";
+
+/// The nested login-item helpers the app bundle embeds.
+///
+/// Each helper's directory is named exactly like its display name, because
+/// macOS privacy panes fall back to a bundle's filename whenever its metadata
+/// is stale — a spelling that differs from the display name, or a dev helper
+/// named like the shipped one, renders as a row nobody can trust. Packaging
+/// writes these names and both the app and the agent look the helpers up by
+/// them at runtime, so they are defined once here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Helper {
+    /// The always-on agent: the process that owns the hook and holds the
+    /// Accessibility grant.
+    Agent,
+    /// The Actions Ring renderer.
+    Overlay,
+}
+
+impl Helper {
+    /// The helper's bundle identifier.
+    #[must_use]
+    pub const fn bundle_id(self) -> &'static str {
+        match self {
+            Self::Agent => AGENT_ID,
+            Self::Overlay => OVERLAY_ID,
+        }
+    }
+
+    /// The shipped display name — and so the shipped bundle directory's name.
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Agent => "OpenHID Agent",
+            Self::Overlay => "OpenHID Overlay",
+        }
+    }
+
+    /// The helper's executable: how cargo names the binary, and how the
+    /// process shows up in a process list.
+    #[must_use]
+    pub const fn executable(self) -> &'static str {
+        match self {
+            Self::Agent => "openhid-agent",
+            Self::Overlay => "openhid-overlay",
+        }
+    }
+
+    /// The shipped helper's bundle, relative to the app bundle's root.
+    #[must_use]
+    pub fn bundle_dir(self) -> String {
+        format!("{LOGIN_ITEMS_DIR}/{}.app", self.display_name())
+    }
+
+    /// A dev build's helper bundle, relative to the app bundle's root.
+    #[must_use]
+    pub fn dev_bundle_dir(self) -> String {
+        format!("{LOGIN_ITEMS_DIR}/{}.app", dev_name(self.display_name()))
+    }
+
+    /// The helper's executable inside `bundle_dir`, one of [`Self::bundle_dir`]
+    /// or [`Self::dev_bundle_dir`].
+    #[must_use]
+    pub fn executable_in(self, bundle_dir: &str) -> String {
+        format!("{bundle_dir}/Contents/MacOS/{}", self.executable())
+    }
+
+    /// The bundle name this helper shipped under before it took its display
+    /// name. History, so spelled out rather than derived: a future rename must
+    /// not quietly stop old installs from being found.
+    const fn legacy_bundle_name(self) -> &'static str {
+        match self {
+            Self::Agent => "OpenHIDAgent",
+            Self::Overlay => "OpenHIDOverlay",
+        }
+    }
+
+    /// Every path, relative to the app bundle's root, at which this helper's
+    /// executable has ever shipped, newest layout first: the dev-suffixed
+    /// name, the shipped name, and the pre-rename name for bundles built
+    /// before the helpers took their display names.
+    #[must_use]
+    pub fn executable_candidates(self) -> [String; 3] {
+        let legacy = format!("{LOGIN_ITEMS_DIR}/{}.app", self.legacy_bundle_name());
+        [
+            self.executable_in(&self.dev_bundle_dir()),
+            self.executable_in(&self.bundle_dir()),
+            self.executable_in(&legacy),
+        ]
+    }
+}
+
+/// The `.app` root of a packaged helper binary — `…/Foo.app/Contents/MacOS/foo`
+/// gives `…/Foo.app` — and `None` for a bare binary such as a cargo build
+/// output.
+#[must_use]
+pub fn helper_bundle_root(executable: &Path) -> Option<&Path> {
+    let bundle = executable.ancestors().nth(3)?;
+    (bundle.extension()? == "app").then_some(bundle)
+}
+
+/// Whether `id` names a dev build — the inverse of [`dev_id`].
+///
+/// The profile split keys off this: a dev bundle gets its own config directory
+/// and IPC socket, so a false negative points a dev build at the user's real
+/// config. That asymmetry is why the legacy `.dev` spelling is still accepted —
+/// a local bundle built before the rename must not silently claim production
+/// state just because nobody rebuilt it.
+#[must_use]
+pub fn is_dev_id(id: &str) -> bool {
+    strip_dev_suffix(id) != id
+}
+
+/// Whether `id` — a foreground-application identifier, as
+/// [`ForegroundApp::id`](crate::app::ForegroundApp::id) defines one — names one
+/// of OpenHID's own three processes.
+///
+/// The frontmost-app reader sees the GUI whenever its window is in front, so
+/// without this OpenHID would offer itself as a target for a per-app profile.
+/// Both identifier shapes are recognised: the bundle-id family above (macOS
+/// bundle ids, and the `WM_CLASS` / `app_id` the GUI advertises on Linux), dev
+/// builds included; and the Windows executable path, matched on its file name
+/// — the installed names from `packaging/windows/OpenHID.wxs` (which carries
+/// its own literal copy, since it can't reference Rust — keep the two in sync)
+/// plus the cargo artifact name a dev build's GUI runs under.
+#[must_use]
+pub fn is_openhid_foreground_id(id: &str) -> bool {
+    const WINDOWS_SUFFIX: &str = ".exe";
+    let executables = [
+        CLI_EXECUTABLE,
+        GUI_EXECUTABLE,
+        Helper::Agent.executable(),
+        Helper::Overlay.executable(),
+    ];
+
+    let base = strip_dev_suffix(id);
+    [APP_ID, AGENT_ID, OVERLAY_ID]
+        .iter()
+        .any(|own| base.eq_ignore_ascii_case(own))
+        || id
+            .rsplit(['\\', '/'])
+            .next()
+            .filter(|file| ends_with_ignore_ascii_case(file, WINDOWS_SUFFIX))
+            .and_then(|file| file.get(..file.len() - WINDOWS_SUFFIX.len()))
+            .is_some_and(|stem| executables.iter().any(|exe| stem.eq_ignore_ascii_case(exe)))
+}
+
+/// The dev suffix before it was hyphenated. Recognised, never produced.
+const LEGACY_DEV_SUFFIX: &str = ".dev";
+
+/// `id` with a recognised dev suffix removed, or `id` unchanged.
+fn strip_dev_suffix(id: &str) -> &str {
+    [DEV_SUFFIX, LEGACY_DEV_SUFFIX]
+        .iter()
+        .find(|suffix| ends_with_ignore_ascii_case(id, suffix))
+        .and_then(|suffix| id.get(..id.len() - suffix.len()))
+        .unwrap_or(id)
+}
+
+fn ends_with_ignore_ascii_case(haystack: &str, suffix: &str) -> bool {
+    haystack.len() > suffix.len()
+        && haystack
+            .get(haystack.len() - suffix.len()..)
+            .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+}
+
+/// The release page for a specific version tag (e.g. the running build).
+#[must_use]
+pub fn release_tag_url(version: &str) -> String {
+    format!("{REPO_URL}/releases/tag/v{version}")
+}
+
+/// A GUI action the agent's tray (or any external caller) requests by opening
+/// an `openhid://<name>` URL. macOS delivers it to the running GUI via an
+/// Apple Event; the GUI parses it back into this enum and dispatches.
+///
+/// The agent builds URLs with [`DeeplinkCommand::to_url`]; the GUI reads them
+/// with [`DeeplinkCommand::parse_url`]. The command names are defined once, in
+/// [`DeeplinkCommand::as_name`], so the two sides cannot disagree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeeplinkCommand {
+    /// Show / foreground the main window.
+    Show,
+    /// Open the Settings window.
+    OpenSettings,
+    /// Open Settings on the About page.
+    OpenAbout,
+    /// Run a manual update check and open Settings on the Updates page, where
+    /// its status is rendered.
+    CheckForUpdates,
+    /// Quit the GUI.
+    Quit,
+}
+
+impl DeeplinkCommand {
+    /// The URL scheme OpenHID registers with LaunchServices.
+    pub const SCHEME: &str = "openhid";
+
+    /// The wire name for this command — the host component of its URL.
+    #[must_use]
+    pub const fn as_name(self) -> &'static str {
+        match self {
+            Self::Show => "show",
+            Self::OpenSettings => "open-settings",
+            Self::OpenAbout => "open-about",
+            Self::CheckForUpdates => "check-for-updates",
+            Self::Quit => "quit",
+        }
+    }
+
+    /// Build the `openhid://<name>` URL for this command.
+    #[must_use]
+    pub fn to_url(self) -> String {
+        format!("{}://{}", Self::SCHEME, self.as_name())
+    }
+
+    /// Parse a command from its wire name (the part after `openhid://`).
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "show" => Some(Self::Show),
+            "open-settings" => Some(Self::OpenSettings),
+            "open-about" => Some(Self::OpenAbout),
+            "check-for-updates" => Some(Self::CheckForUpdates),
+            "quit" => Some(Self::Quit),
+            _ => None,
+        }
+    }
+
+    /// Parse a full `openhid://…` URL. The command lives in the URL's host
+    /// component, so any trailing path or query (`openhid://show/`,
+    /// `openhid://show?x=1`) is ignored. Returns `None` for a foreign scheme
+    /// or an unknown command.
+    #[must_use]
+    pub fn parse_url(url: &str) -> Option<Self> {
+        let rest = url.strip_prefix(Self::SCHEME)?.strip_prefix("://")?;
+        let name = rest.split(['/', '?']).next().unwrap_or(rest);
+        Self::from_name(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{
+        AGENT_ID, APP_ID, DeeplinkCommand, Helper, OVERLAY_ID, dev_id, helper_bundle_root,
+        is_dev_id, is_openhid_foreground_id,
+    };
+
+    const ALL: [DeeplinkCommand; 5] = [
+        DeeplinkCommand::Show,
+        DeeplinkCommand::OpenSettings,
+        DeeplinkCommand::OpenAbout,
+        DeeplinkCommand::CheckForUpdates,
+        DeeplinkCommand::Quit,
+    ];
+
+    #[test]
+    fn project_links_match_cargo_metadata_and_preserve_upstream_credit() {
+        assert_eq!(super::REPO_URL, env!("CARGO_PKG_REPOSITORY"));
+        assert_ne!(super::REPO_URL, super::UPSTREAM_URL);
+        assert!(include_str!("../../../NOTICE").contains(super::UPSTREAM_URL));
+    }
+
+    #[test]
+    fn url_round_trips() {
+        for cmd in ALL {
+            assert_eq!(DeeplinkCommand::parse_url(&cmd.to_url()), Some(cmd));
+        }
+    }
+
+    #[test]
+    fn parse_url_ignores_trailing_path_and_query() {
+        assert_eq!(
+            DeeplinkCommand::parse_url("openhid://show/"),
+            Some(DeeplinkCommand::Show)
+        );
+        assert_eq!(
+            DeeplinkCommand::parse_url("openhid://open-settings?from=tray"),
+            Some(DeeplinkCommand::OpenSettings)
+        );
+    }
+
+    #[test]
+    fn parse_url_rejects_foreign_scheme_and_unknown_command() {
+        assert_eq!(DeeplinkCommand::parse_url("https://example.com/show"), None);
+        assert_eq!(DeeplinkCommand::parse_url("openhid://bogus"), None);
+        assert_eq!(DeeplinkCommand::parse_url("openhid://"), None);
+    }
+
+    #[test]
+    fn dev_ids_round_trip() {
+        for id in [APP_ID, AGENT_ID, OVERLAY_ID] {
+            assert!(is_dev_id(&dev_id(id)), "{id} suffixed must read as dev");
+            assert!(!is_dev_id(id), "{id} is production");
+        }
+    }
+
+    #[test]
+    fn helper_bundles_are_named_after_their_display_names() {
+        assert_eq!(
+            Helper::Agent.bundle_dir(),
+            "Contents/Library/LoginItems/OpenHID Agent.app"
+        );
+        assert_eq!(
+            Helper::Overlay.dev_bundle_dir(),
+            "Contents/Library/LoginItems/OpenHID Overlay Dev.app"
+        );
+        // Bundles built before the helpers took their display names are
+        // still found, after the current layouts.
+        assert_eq!(
+            Helper::Agent.executable_candidates()[2],
+            "Contents/Library/LoginItems/OpenHIDAgent.app/Contents/MacOS/openhid-agent"
+        );
+    }
+
+    #[test]
+    fn a_helper_bundle_root_is_three_levels_above_its_executable() {
+        let packaged = Path::new(
+            "/Applications/OpenHID.app/Contents/Library/LoginItems/OpenHID Agent.app/Contents/MacOS/openhid-agent",
+        );
+        assert_eq!(
+            helper_bundle_root(packaged),
+            Some(Path::new(
+                "/Applications/OpenHID.app/Contents/Library/LoginItems/OpenHID Agent.app"
+            ))
+        );
+        let dev = Path::new(
+            "/Users/me/OpenHID/target/dev/OpenHID.app/Contents/Library/LoginItems/OpenHID Agent Dev.app/Contents/MacOS/openhid-agent",
+        );
+        assert_eq!(
+            helper_bundle_root(dev),
+            Some(Path::new(
+                "/Users/me/OpenHID/target/dev/OpenHID.app/Contents/Library/LoginItems/OpenHID Agent Dev.app"
+            ))
+        );
+        assert_eq!(
+            helper_bundle_root(Path::new("target/debug/openhid-agent")),
+            None
+        );
+    }
+
+    #[test]
+    fn the_legacy_dotted_suffix_still_reads_as_dev() {
+        // A stale `target/dev` bundle from before the rename must not fall
+        // through to the production config directory and IPC socket.
+        assert!(is_dev_id("org.openhid.agent.dev"));
+        assert!(is_dev_id("org.openhid.openhid.dev"));
+    }
+
+    #[test]
+    fn a_bare_suffix_is_not_a_dev_id() {
+        assert!(!is_dev_id("-dev"));
+        assert!(!is_dev_id(".dev"));
+        assert!(!is_dev_id(""));
+    }
+
+    #[test]
+    fn matching_ignores_case_but_not_position() {
+        assert!(is_dev_id("org.openhid.agent-DEV"));
+        assert!(!is_dev_id("org.openhid.dev-agent"));
+    }
+
+    #[test]
+    fn our_own_processes_are_recognised_in_both_identifier_shapes() {
+        for id in [APP_ID, AGENT_ID, OVERLAY_ID] {
+            assert!(is_openhid_foreground_id(id), "{id}");
+            assert!(is_openhid_foreground_id(&dev_id(id)), "dev {id}");
+        }
+        // Windows reports a lower-cased executable path; a dev build runs the
+        // cargo artifact out of `target/`.
+        assert!(is_openhid_foreground_id(
+            r"c:\program files\openhid\openhid.exe"
+        ));
+        assert!(is_openhid_foreground_id(
+            r"c:\program files\openhid\openhid-agent.exe"
+        ));
+        assert!(is_openhid_foreground_id(
+            r"c:\src\openhid\target\debug\openhid-desktop.exe"
+        ));
+    }
+
+    #[test]
+    fn a_foreign_app_that_merely_starts_the_same_way_is_not_ours() {
+        assert!(!is_openhid_foreground_id("org.openhid.openhid.helper"));
+        assert!(!is_openhid_foreground_id(r"c:\apps\openhidc.exe"));
+        assert!(!is_openhid_foreground_id("com.apple.Safari"));
+        assert!(!is_openhid_foreground_id(""));
+    }
+}

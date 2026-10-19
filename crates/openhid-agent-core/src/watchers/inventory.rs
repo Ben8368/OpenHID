@@ -1,0 +1,735 @@
+//! Event-first HID inventory reconciliation.
+//!
+//! A dedicated thread owns the persistent enumerator and every HID++ channel
+//! it opens. OS hotplug, receiver/device lifecycle broadcasts, native/system
+//! resume, bounded repair, and settings confirmation are typed reasons to run
+//! one full authoritative reconciliation. A recovery scan runs inside the probe
+//! cache's freshness window because some firmware/hosts miss lifecycle events
+//! and legacy or voltage battery features have no broadcast API.
+
+use std::collections::{BTreeMap, HashSet};
+use std::future::pending;
+use std::time::{Instant, SystemTime};
+
+use futures_lite::StreamExt as _;
+use openhid_core::device::{DeviceInventory, StandaloneDevice};
+use openhid_hid::inventory::events::{BacklightUpdate, HidppEventSource};
+use openhid_hid::{ChannelRegistry, DeviceIoGate};
+use tokio::sync::{mpsc, watch};
+use tracing::{debug, info, warn};
+
+use schedule::{
+    DeadlinePurpose, HID_EVENT_SETTLE, HOTPLUG_SETTLE, ReconcileTrigger, SYSTEM_RESUME_SETTLE,
+    ScanClock, Schedule, WakeDetector,
+};
+
+use crate::hardware::HardwareContext;
+
+#[cfg(test)]
+mod replay_tests;
+mod schedule;
+
+/// Consecutive *initial* enumerate failures before the watcher declares
+/// enumeration [`InventoryEvent::Unavailable`]. Only counts before the first
+/// success: a mid-session failure keeps the last good snapshot instead (see
+/// the error arm below), and a later success upgrades `Unavailable` back to a
+/// live inventory.
+const INITIAL_FAILURE_LIMIT: u8 = 3;
+
+/// Number of successful raw-HID snapshots an omitted node may miss before it
+/// is treated as a real detach. OS enumeration can briefly omit a registered
+/// interface during unplug/replug and hotplug bursts, so a successful empty
+/// snapshot is not immediately destructive for standalone lights.
+const RAW_NODE_MISS_GRACE: u8 = 2;
+
+/// What the watcher tells the agent.
+#[derive(Debug)]
+pub enum InventoryEvent {
+    /// A completed enumeration — empty means "checked, no devices".
+    Snapshot {
+        /// HID++ receiver/direct inventory.
+        inventories: Vec<DeviceInventory>,
+        /// Recognized standalone raw-HID devices.
+        standalone: Vec<StandaloneDevice>,
+        /// Whether this pass failed to open at least one HID++ node — on
+        /// macOS the observable signature of a missing or stale Input
+        /// Monitoring grant (the open denial itself is silent).
+        hid_open_failures: bool,
+    },
+    /// Enumeration has never succeeded and won't be treated as "still
+    /// starting" any longer; without this the GUI would show its scanning
+    /// state forever on a broken HID backend.
+    Unavailable,
+    /// A native resume notification or wall/monotonic clock gap says the
+    /// system slept and woke. Devices may have power-cycled while their
+    /// set/route/online state looks unchanged across the gap, so the agent
+    /// re-applies volatile settings on the next snapshot (#189).
+    SystemWake,
+    /// A keyboard firmware event carrying the latest backlight level.
+    BacklightChanged {
+        device_index: u8,
+        current_level: u8,
+        levels: u8,
+        visible: bool,
+    },
+    /// A device's `WirelessDeviceStatus` feature (`0x1d4b`) broadcast a
+    /// reconnection — the firmware explicitly asking the host to reconfigure
+    /// it after a nap. A nap can be too short for any reconciliation to have
+    /// observed the device offline, so the agent must not rely on an
+    /// offline→online transition in the snapshot that follows: it re-applies
+    /// volatile settings on the next snapshot, like [`Self::SystemWake`] but
+    /// with the shorter link-race confirm budget.
+    DeviceWake,
+}
+
+/// The watcher's cross-pass memory, factored out of the I/O loop so the
+/// result → event decision is unit-testable without spawning the thread or
+/// touching real HID.
+#[derive(Default)]
+struct WatchState {
+    /// Set once any enumeration has completed. After that, a failed pass keeps
+    /// the last good snapshot forever instead of ever reporting `Unavailable`.
+    succeeded: bool,
+    /// Consecutive failures, counted only before the first success.
+    initial_failures: u8,
+    raw_nodes: RawNodeLedger,
+}
+
+#[derive(Default)]
+struct RawNodeLedger {
+    entries: BTreeMap<String, RawNodeEntry>,
+}
+
+struct RawNodeEntry {
+    device: StandaloneDevice,
+    misses: u8,
+}
+
+impl RawNodeLedger {
+    /// Reconcile one successful raw enumeration with the last good per-node
+    /// records. Omitted nodes stay offline for a bounded grace; a node seen
+    /// again is replaced by its fresh descriptor and its miss count resets.
+    fn reconcile(&mut self, live: Vec<StandaloneDevice>) -> Vec<StandaloneDevice> {
+        let live_keys: HashSet<String> = live.iter().map(raw_node_key).collect();
+        for device in live {
+            self.entries
+                .insert(raw_node_key(&device), RawNodeEntry { device, misses: 0 });
+        }
+
+        let missing: Vec<String> = self
+            .entries
+            .keys()
+            .filter(|key| !live_keys.contains(*key))
+            .cloned()
+            .collect();
+        for key in missing {
+            let Some(entry) = self.entries.get_mut(&key) else {
+                continue;
+            };
+            entry.misses = entry.misses.saturating_add(1);
+            if entry.misses > RAW_NODE_MISS_GRACE {
+                self.entries.remove(&key);
+            } else {
+                entry.device.online = false;
+            }
+        }
+
+        self.entries
+            .values()
+            .map(|entry| entry.device.clone())
+            .collect()
+    }
+
+    /// Return the last completed raw-HID snapshot without counting a miss.
+    /// Used when standalone enumeration itself fails: absence was not
+    /// observed, so advancing detach grace would manufacture a disconnect.
+    fn snapshot(&self) -> Vec<StandaloneDevice> {
+        self.entries
+            .values()
+            .map(|entry| entry.device.clone())
+            .collect()
+    }
+
+    fn has_pending_misses(&self) -> bool {
+        self.entries.values().any(|entry| entry.misses > 0)
+    }
+}
+
+fn raw_node_key(device: &StandaloneDevice) -> String {
+    let address = &device.address;
+    format!(
+        "{:04x}:{:04x}:{:04x}:{:04x}:{}",
+        address.vendor_id,
+        address.product_id,
+        address.usage_page,
+        address.usage_id,
+        address.identity
+    )
+}
+
+impl WatchState {
+    /// Combine a successful HID++ enumeration with the independently fallible
+    /// raw-HID pass. A raw backend failure must not suppress fresh mouse and
+    /// keyboard inventory, nor count every remembered light as detached.
+    fn classify_parts(
+        &mut self,
+        inventories: Vec<DeviceInventory>,
+        standalone: Result<Vec<StandaloneDevice>, openhid_hid::InventoryError>,
+        hid_open_failures: bool,
+    ) -> InventoryEvent {
+        self.succeeded = true;
+        let standalone = match standalone {
+            Ok(devices) => self.raw_nodes.reconcile(devices),
+            Err(e) => {
+                warn!(
+                    error = ?e,
+                    "standalone enumerate failed during reconciliation — keeping last raw snapshot"
+                );
+                self.raw_nodes.snapshot()
+            }
+        };
+        InventoryEvent::Snapshot {
+            inventories,
+            standalone,
+            hid_open_failures,
+        }
+    }
+
+    /// Decide what (if anything) a reconciliation pass emits.
+    ///
+    /// - `Ok(snapshot)` — a completed enumeration (an empty one included: that's
+    ///   a genuine disconnect) — is forwarded so the agent's device set tracks
+    ///   reality. A transient per-node probe miss never reaches here as an empty
+    ///   `Ok`: `openhid_hid`'s `NodeLedger` replays the node's last inventory
+    ///   (#218/#222).
+    /// - `Err(..)` means enumeration itself failed (OS-level HID enumerate
+    ///   error): emit nothing, so the agent keeps its last good device set and
+    ///   live bindings instead of wiping them. Before the *first*
+    ///   success there is no good set to keep, so persistent initial failure is
+    ///   reported once as [`InventoryEvent::Unavailable`]; the loop keeps
+    ///   retrying and a later success recovers.
+    fn classify(
+        &mut self,
+        result: Result<(Vec<DeviceInventory>, Vec<StandaloneDevice>), openhid_hid::InventoryError>,
+    ) -> Option<InventoryEvent> {
+        match result {
+            Ok((inventories, standalone)) => {
+                Some(self.classify_parts(inventories, Ok(standalone), false))
+            }
+            Err(e) => {
+                warn!(error = ?e, "enumerate failed during reconciliation — keeping last snapshot");
+                if self.succeeded {
+                    return None;
+                }
+                self.initial_failures = self.initial_failures.saturating_add(1);
+                (self.initial_failures == INITIAL_FAILURE_LIMIT)
+                    .then_some(InventoryEvent::Unavailable)
+            }
+        }
+    }
+}
+
+/// A handle for requesting inventory work whose purpose belongs to the
+/// authoritative orchestrator rather than a HID event source.
+#[derive(Clone)]
+pub struct InventoryRefresh {
+    sender: mpsc::Sender<RefreshRequest>,
+    /// Receiver rescans have their own one-slot channel, so a queued settings
+    /// confirmation never crowds one out; a full slot means one is pending.
+    rescan: mpsc::Sender<()>,
+}
+
+impl InventoryRefresh {
+    /// Request the next delayed confirmation pass for volatile settings.
+    /// Repeated requests coalesce into the bounded one-slot channel.
+    pub fn request_settings_confirmation(&self) {
+        let _ = self.sender.try_send(RefreshRequest::SettingsConfirmation);
+    }
+
+    /// Rescan after the agent changed a receiver's pairing table. A receiver
+    /// announces a new pairing with a connection notification, which already
+    /// triggers a scan, but removing one sends none the watcher listens to.
+    pub fn request_receiver_rescan(&self) {
+        let _ = self.rescan.try_send(());
+    }
+}
+
+/// The watcher's event stream plus its settings-confirmation request handle.
+pub struct InventoryWatcher {
+    /// Completed snapshots and watcher-health events.
+    pub events: mpsc::UnboundedReceiver<InventoryEvent>,
+    /// Requests driven by state known only after the orchestrator applies a
+    /// snapshot.
+    pub refresh: InventoryRefresh,
+}
+
+#[derive(Clone, Copy)]
+enum RefreshRequest {
+    SettingsConfirmation,
+}
+
+/// Spawn a watcher without publishing channels into a registry.
+#[must_use]
+pub fn spawn() -> InventoryWatcher {
+    spawn_inner(None, HardwareContext::production())
+}
+
+/// Spawn the persistent watcher from `hardware`, publish its already-open
+/// HID++ channels into `registry`, and stop active reconciliation while its
+/// device-I/O gate is closed.
+#[must_use]
+pub fn spawn_with_hardware(
+    hardware: HardwareContext,
+    registry: ChannelRegistry,
+) -> InventoryWatcher {
+    spawn_inner(Some(registry), hardware)
+}
+
+fn spawn_inner(registry: Option<ChannelRegistry>, hardware: HardwareContext) -> InventoryWatcher {
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let worker_tx = event_tx.clone();
+    let (refresh_tx, refresh_rx) = mpsc::channel(1);
+    let (rescan_tx, rescan_rx) = mpsc::channel(1);
+    let started = openhid_core::worker::spawn("openhid-inventory-watcher", move |runtime| {
+        runtime.block_on(run_watcher(
+            worker_tx, refresh_rx, rescan_rx, registry, hardware,
+        ));
+    });
+    if let Err(error) = started {
+        // OS thread / fork / runtime limits are non-fatal for the agent as a
+        // whole, but enumeration will never run. Say so — sending an empty
+        // *snapshot* here would forge a "checked, no devices" answer for a
+        // check that never happened.
+        warn!(%error, "could not start the inventory watcher — device scanning unavailable");
+        let _ = event_tx.send(InventoryEvent::Unavailable);
+    }
+    InventoryWatcher {
+        events: event_rx,
+        refresh: InventoryRefresh {
+            sender: refresh_tx,
+            rescan: rescan_tx,
+        },
+    }
+}
+
+async fn run_watcher(
+    events: mpsc::UnboundedSender<InventoryEvent>,
+    refresh_requests: mpsc::Receiver<RefreshRequest>,
+    rescans: mpsc::Receiver<()>,
+    registry: Option<ChannelRegistry>,
+    hardware: HardwareContext,
+) {
+    // The listener is attached to each inventory-owned channel before its
+    // first probe. Lifecycle hints use a bounded queue; backlight readings
+    // retain the latest value independently of slow inventory scans.
+    let (event_notifier, hid_events) = openhid_hid::inventory::events::event_channel();
+    let backlight_events = hid_events.backlights();
+    let mut enumerator = hardware.enumerator().with_event_notifier(event_notifier);
+    if let Some(registry) = registry {
+        enumerator = enumerator.with_registry(registry);
+    }
+    let hotplug = match hardware.watch_hotplug() {
+        Ok(stream) => Some(stream),
+        Err(error) => {
+            warn!(
+                ?error,
+                "hotplug watch unavailable — recovery scan remains active"
+            );
+            None
+        }
+    };
+    let now = Instant::now();
+    let device_io = hardware.device_io();
+    let backlight_io = device_io.clone();
+    let backlight_tx = events.clone();
+    let mut worker = InventoryWorker {
+        events,
+        refresh_requests,
+        rescans,
+        enumerator,
+        state: WatchState::default(),
+        hotplug,
+        hid_events,
+        schedule: Schedule::new(now),
+        wake_detector: WakeDetector::new(SystemTime::now(), now),
+        device_io,
+        hardware,
+        refresh_open: true,
+        rescans_open: true,
+    };
+    tokio::select! {
+        () = worker.run() => {}
+        () = forward_backlights(backlight_events, backlight_tx, backlight_io) => {}
+    }
+}
+
+async fn forward_backlights(
+    mut backlights: watch::Receiver<Option<BacklightUpdate>>,
+    events: mpsc::UnboundedSender<InventoryEvent>,
+    device_io: DeviceIoGate,
+) {
+    while backlights.changed().await.is_ok() {
+        let Some(update) = *backlights.borrow_and_update() else {
+            continue;
+        };
+        if !device_io.allows_io() {
+            continue;
+        }
+        if events
+            .send(InventoryEvent::BacklightChanged {
+                device_index: update.device_index,
+                current_level: update.current_level,
+                levels: update.levels,
+                visible: update.visible,
+            })
+            .is_err()
+        {
+            return;
+        }
+        debug!(
+            device_index = update.device_index,
+            current_level = update.current_level,
+            "backlight event forwarded"
+        );
+    }
+}
+
+struct InventoryWorker {
+    events: mpsc::UnboundedSender<InventoryEvent>,
+    refresh_requests: mpsc::Receiver<RefreshRequest>,
+    rescans: mpsc::Receiver<()>,
+    enumerator: openhid_hid::inventory::Enumerator,
+    hardware: HardwareContext,
+    state: WatchState,
+    hotplug: Option<openhid_hid::backend::HotplugStream>,
+    hid_events: openhid_hid::inventory::events::EventReceiver,
+    schedule: Schedule,
+    wake_detector: WakeDetector,
+    device_io: DeviceIoGate,
+    refresh_open: bool,
+    rescans_open: bool,
+}
+
+impl InventoryWorker {
+    async fn run(&mut self) {
+        let mut trigger = ReconcileTrigger::Initial;
+        loop {
+            if !self.device_io.allows_io() {
+                if !self.device_io.wait_until_allowed().await {
+                    return;
+                }
+                trigger = ReconcileTrigger::SystemResume;
+            }
+            if !self.settle_trigger(trigger).await || !self.reconcile(trigger).await {
+                return;
+            }
+            if !self.device_io.allows_io() {
+                continue;
+            }
+            trigger = self.next_trigger().await;
+        }
+    }
+
+    async fn settle_trigger(&mut self, trigger: ReconcileTrigger) -> bool {
+        match trigger {
+            ReconcileTrigger::Hotplug => {
+                tokio::time::sleep(HOTPLUG_SETTLE).await;
+                if let Some(stream) = self.hotplug.as_mut() {
+                    while let Some(drained) = futures_lite::future::poll_once(stream.next()).await {
+                        if drained.is_none() {
+                            self.hotplug = None;
+                            warn!("hotplug stream ended — recovery scan remains active");
+                            break;
+                        }
+                    }
+                }
+            }
+            ReconcileTrigger::HidEvent(source) => {
+                debug!(?source, "HID++ lifecycle event — reconciling inventory");
+                tokio::time::sleep(HID_EVENT_SETTLE).await;
+                // The settle drain coalesces a burst into one reconciliation,
+                // but a `0x1d4b` reconnect broadcast anywhere in the burst
+                // still means a device asked to be reconfigured — that intent
+                // must survive the drain.
+                let mut device_wake = source == HidppEventSource::WirelessDeviceStatus;
+                while let Ok(drained) = self.hid_events.try_recv() {
+                    device_wake |= drained == HidppEventSource::WirelessDeviceStatus;
+                }
+                if device_wake && self.events.send(InventoryEvent::DeviceWake).is_err() {
+                    return false;
+                }
+            }
+            ReconcileTrigger::SystemResume => {
+                info!("system resume — replaying settings on a settled inventory");
+                if self.events.send(InventoryEvent::SystemWake).is_err() {
+                    return false;
+                }
+                tokio::time::sleep(SYSTEM_RESUME_SETTLE).await;
+            }
+            ReconcileTrigger::Initial
+            | ReconcileTrigger::RepairRetry
+            | ReconcileTrigger::SettingsConfirmation
+            | ReconcileTrigger::RecoveryScan => {}
+        }
+        true
+    }
+
+    async fn reconcile(&mut self, trigger: ReconcileTrigger) -> bool {
+        // Recovery uses this instant: enumerate stamps `probed_at` from its own
+        // start, and the cache stays fresh through `PROBE_CACHE_FRESHNESS`.
+        // Repair retries use completion, or a pass longer than
+        // `FAST_RETRY_DELAY` would already be due when it returns (#1774).
+        let started = Instant::now();
+        let (event, needs_repair) = match self.enumerator.enumerate().await {
+            Ok(inventories) => {
+                let standalone = self.hardware.enumerate_standalone().await;
+                let standalone_failed = standalone.is_err();
+                let open_failures = self.enumerator.open_failures_last_tick();
+                let event = self
+                    .state
+                    .classify_parts(inventories, standalone, open_failures);
+                let needs_repair = self.enumerator.retry_needed_last_tick()
+                    || standalone_failed
+                    || self.state.raw_nodes.has_pending_misses();
+                (Some(event), needs_repair)
+            }
+            Err(error) => (self.state.classify(Err(error)), true),
+        };
+        if !self.device_io.allows_io() {
+            debug!(
+                ?trigger,
+                "device I/O suspended during inventory reconciliation — result discarded"
+            );
+            return true;
+        }
+        if let Some(event) = event
+            && self.events.send(event).is_err()
+        {
+            debug!("inventory watcher receiver dropped — exiting");
+            return false;
+        }
+        self.schedule.scan_finished(
+            trigger,
+            needs_repair,
+            ScanClock {
+                started,
+                finished: Instant::now(),
+            },
+        );
+        true
+    }
+
+    async fn next_trigger(&mut self) -> ReconcileTrigger {
+        let trigger = loop {
+            let (deadline, purpose) = self.schedule.next_deadline();
+            let sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
+            tokio::pin!(sleep);
+            tokio::select! {
+                hotplug_event = async {
+                    match self.hotplug.as_mut() {
+                        Some(stream) => stream.next().await,
+                        None => pending().await,
+                    }
+                } => if let Some(event) = hotplug_event {
+                    debug!(?event, "hotplug event — scheduling settled reconciliation");
+                    break ReconcileTrigger::Hotplug;
+                } else {
+                    self.hotplug = None;
+                    warn!("hotplug stream ended — recovery scan remains active");
+                },
+                Some(source) = self.hid_events.recv() => {
+                    break ReconcileTrigger::HidEvent(source);
+                }
+                allowed = self.device_io.changed() => {
+                    if allowed == Some(false) && self.device_io.wait_until_allowed().await {
+                        break ReconcileTrigger::SystemResume;
+                    }
+                    if allowed == Some(true) {
+                        break ReconcileTrigger::SystemResume;
+                    }
+                }
+                request = async {
+                    if self.refresh_open {
+                        self.refresh_requests.recv().await
+                    } else {
+                        pending().await
+                    }
+                } => match request {
+                    Some(RefreshRequest::SettingsConfirmation) => {
+                        self.schedule.request_settings_confirmation(Instant::now());
+                    }
+                    None => self.refresh_open = false,
+                },
+                rescan = async {
+                    if self.rescans_open {
+                        self.rescans.recv().await
+                    } else {
+                        pending().await
+                    }
+                } => match rescan {
+                    Some(()) => {
+                        break ReconcileTrigger::HidEvent(HidppEventSource::ReceiverConnection);
+                    }
+                    None => self.rescans_open = false,
+                },
+                () = &mut sleep => {
+                    match purpose {
+                        DeadlinePurpose::RepairRetry => {
+                            break ReconcileTrigger::RepairRetry;
+                        }
+                        DeadlinePurpose::SettingsConfirmation => {
+                            break ReconcileTrigger::SettingsConfirmation;
+                        }
+                        DeadlinePurpose::RecoveryScan => {
+                            break ReconcileTrigger::RecoveryScan;
+                        }
+                    }
+                }
+            }
+        };
+
+        // Any event that wakes this task is also an opportunity to compare the
+        // clocks. This preserves resume recovery when the native source is
+        // unavailable without restoring a dedicated wake-check timer. A
+        // SystemResume reconciliation is already authoritative, so replacing
+        // another trigger loses no inventory work.
+        if !cfg!(target_os = "macos")
+            && trigger != ReconcileTrigger::SystemResume
+            && self
+                .wake_detector
+                .observe(SystemTime::now(), Instant::now())
+        {
+            ReconcileTrigger::SystemResume
+        } else {
+            trigger
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::assert_matches;
+
+    use openhid_core::device::{DeviceKind, RawDeviceAddress, StandaloneDevice};
+    use openhid_hid::{BackendError, InventoryError};
+
+    use super::{INITIAL_FAILURE_LIMIT, InventoryEvent, WatchState};
+
+    /// A transport-level enumerate failure — what the watcher's `Err` arm now
+    /// sees (a partial per-node read is replayed by the hid ledger as `Ok`).
+    fn enumerate_failed() -> InventoryError {
+        InventoryError::Hid(BackendError::Disconnected)
+    }
+
+    #[test]
+    fn completed_enumeration_is_forwarded_even_when_empty() {
+        let mut state = WatchState::default();
+        // A genuine "checked, nothing there" still propagates as a disconnect —
+        // the resilience must not swallow a real empty.
+        assert_matches!(
+            state.classify(Ok((vec![], vec![]))),
+            Some(InventoryEvent::Snapshot { inventories, standalone, .. }) if inventories.is_empty() && standalone.is_empty()
+        );
+        assert!(state.succeeded);
+    }
+
+    #[test]
+    fn failure_after_a_success_keeps_the_last_snapshot() {
+        let mut state = WatchState::default();
+        // A good tick first, so there is a last-known-good set to preserve.
+        assert_matches!(
+            state.classify(Ok((vec![], vec![]))),
+            Some(InventoryEvent::Snapshot { .. })
+        );
+        // Then transient enumerate failures emit nothing — the agent keeps the
+        // last snapshot instead of flapping to "No devices" (#218).
+        assert!(state.classify(Err(enumerate_failed())).is_none());
+        assert!(state.classify(Err(enumerate_failed())).is_none());
+    }
+
+    #[test]
+    fn standalone_failure_keeps_raw_nodes_without_suppressing_the_snapshot() {
+        let mut state = WatchState::default();
+        let _ = state.classify(Ok((vec![], vec![raw_light("serial:glow-1")])));
+
+        assert_matches!(
+            state.classify_parts(vec![], Err(enumerate_failed()), false),
+            InventoryEvent::Snapshot { inventories, standalone, .. }
+                if inventories.is_empty()
+                    && standalone.len() == 1
+                    && standalone[0].online
+        );
+    }
+
+    #[test]
+    fn persistent_initial_failure_reports_unavailable_once_then_recovers() {
+        let mut state = WatchState::default();
+        // No snapshot has ever landed, so repeated failure must eventually stop
+        // looking like "still scanning".
+        for _ in 0..INITIAL_FAILURE_LIMIT - 1 {
+            assert!(state.classify(Err(enumerate_failed())).is_none());
+        }
+        assert_matches!(
+            state.classify(Err(enumerate_failed())),
+            Some(InventoryEvent::Unavailable)
+        );
+        // Reported once, not on every later failure.
+        assert!(state.classify(Err(enumerate_failed())).is_none());
+        // …and a later success recovers with a live snapshot.
+        assert_matches!(
+            state.classify(Ok((vec![], vec![]))),
+            Some(InventoryEvent::Snapshot { .. })
+        );
+    }
+
+    fn raw_light(identity: &str) -> StandaloneDevice {
+        StandaloneDevice {
+            address: RawDeviceAddress {
+                vendor_id: 0x046d,
+                product_id: 0xc900,
+                usage_page: 0xff43,
+                usage_id: 0x0202,
+                identity: identity.into(),
+            },
+            display_name: "Litra Glow".into(),
+            manufacturer: Some("Logi".into()),
+            serial_number: None,
+            unit_id: [0; 4],
+            kind: DeviceKind::Light,
+            online: true,
+            capabilities: None,
+            light_capabilities: None,
+            driver_id: "litra".into(),
+            registry_model_id: None,
+        }
+    }
+
+    #[test]
+    fn raw_node_omission_is_graced_and_recovers() {
+        let mut state = WatchState::default();
+        assert_matches!(
+            state.classify(Ok((vec![], vec![raw_light("id:node")]))) ,
+            Some(InventoryEvent::Snapshot { standalone, .. }) if standalone.len() == 1 && standalone[0].online
+        );
+        assert_matches!(
+            state.classify(Ok((vec![], vec![]))),
+            Some(InventoryEvent::Snapshot { standalone, .. }) if standalone.len() == 1 && !standalone[0].online
+        );
+        assert_matches!(
+            state.classify(Ok((vec![], vec![raw_light("id:node")]))) ,
+            Some(InventoryEvent::Snapshot { standalone, .. }) if standalone.len() == 1 && standalone[0].online
+        );
+    }
+
+    #[test]
+    fn raw_node_is_removed_after_grace_is_exhausted() {
+        let mut state = WatchState::default();
+        let _ = state.classify(Ok((vec![], vec![raw_light("id:node")])));
+        let _ = state.classify(Ok((vec![], vec![])));
+        let _ = state.classify(Ok((vec![], vec![])));
+        assert_matches!(
+            state.classify(Ok((vec![], vec![]))),
+            Some(InventoryEvent::Snapshot { standalone, .. }) if standalone.is_empty()
+        );
+    }
+}

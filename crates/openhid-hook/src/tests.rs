@@ -1,0 +1,240 @@
+//! Tests for the platform-agnostic hook API.
+
+use super::*;
+
+/// All `HookError` variants produce non-empty display messages.
+#[test]
+fn hook_error_display() {
+    let errors: &[HookError] = &[
+        HookError::Unsupported,
+        HookError::AccessibilityDenied,
+        HookError::MacOsTap("test reason".into()),
+        #[cfg(target_os = "linux")]
+        HookError::NoDeviceFound,
+        #[cfg(target_os = "linux")]
+        HookError::Linux(std::io::Error::other("test reason")),
+    ];
+    for e in errors {
+        assert!(!e.to_string().is_empty(), "empty display for {e:?}");
+    }
+}
+
+/// `MouseEvent` is `Clone + Debug` — both variants exercise without panic.
+#[test]
+fn mouse_event_clone_and_debug() {
+    let events = [
+        MouseEvent::Button {
+            id: ButtonId::Back,
+            pressed: true,
+            device: None,
+        },
+        MouseEvent::Scroll {
+            delta: ScrollDelta::wheel_ticks(1.0, -1.5),
+            from_trackpad: false,
+            device: None,
+        },
+        MouseEvent::Moved {
+            delta_x: 3,
+            delta_y: -2,
+        },
+    ];
+    for e in &events {
+        let cloned = e.clone();
+        let _ = format!("{e:?}");
+        let _ = format!("{cloned:?}");
+    }
+}
+
+/// `negate_scroll_y` flips only a scroll event's vertical delta, and leaves
+/// every other `MouseEvent` variant untouched — the shared fix for #1737.
+#[test]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn negate_scroll_y_flips_only_scroll_events() {
+    let scroll = MouseEvent::Scroll {
+        delta: ScrollDelta::wheel_ticks(2.0, 3.0),
+        from_trackpad: false,
+        device: None,
+    };
+    assert_eq!(
+        negate_scroll_y(scroll),
+        MouseEvent::Scroll {
+            delta: ScrollDelta::wheel_ticks(2.0, -3.0),
+            from_trackpad: false,
+            device: None,
+        }
+    );
+
+    let moved = MouseEvent::Moved {
+        delta_x: 1,
+        delta_y: 2,
+    };
+    assert_eq!(negate_scroll_y(moved.clone()), moved);
+}
+
+/// `Delivery::run` hands the callback the reversed delta whatever it decides,
+/// and asks for the native event to be reversed only when it is passed
+/// through, so the desktop sees the wheel reversed exactly once (#1737).
+#[test]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn delivery_reverses_the_callback_delta_and_only_a_forwarded_native_event() {
+    let cases = [
+        (true, EventDisposition::PassThrough, -3.0, true),
+        (true, EventDisposition::Suppress, -3.0, false),
+        (false, EventDisposition::PassThrough, 3.0, false),
+        (false, EventDisposition::Suppress, 3.0, false),
+    ];
+    for (invert, disposition, seen_y, invert_native) in cases {
+        let event = HookEvent::Mouse(MouseEvent::Scroll {
+            delta: ScrollDelta::wheel_ticks(2.0, 3.0),
+            from_trackpad: false,
+            device: None,
+        });
+        let mut seen = None;
+        let delivery = Delivery::run(event, invert, |hook_event| {
+            seen = Some(hook_event);
+            disposition
+        });
+        assert_eq!(
+            delivery,
+            Delivery {
+                disposition,
+                invert_native
+            },
+            "invert={invert} {disposition:?}"
+        );
+        assert!(
+            matches!(
+                seen,
+                Some(HookEvent::Mouse(MouseEvent::Scroll { delta, .. }))
+                    if delta == ScrollDelta::wheel_ticks(2.0, seen_y)
+            ),
+            "invert={invert} {disposition:?}: callback saw {seen:?}"
+        );
+    }
+}
+
+/// `EventDisposition` implements `PartialEq` correctly.
+#[test]
+fn event_disposition_equality() {
+    assert_eq!(EventDisposition::PassThrough, EventDisposition::PassThrough);
+    assert_eq!(EventDisposition::Suppress, EventDisposition::Suppress);
+    assert_ne!(EventDisposition::PassThrough, EventDisposition::Suppress);
+}
+
+/// Remap policy is fail-closed: only known Logitech non-trackpad sources.
+#[test]
+fn source_is_remappable_policy() {
+    assert!(!source_is_remappable(None));
+
+    let trackpad = EventDevice {
+        vendor_id: Some(0),
+        product_id: None,
+        product_name: Some("Apple Internal Keyboard / Trackpad".into()),
+    };
+    assert!(!source_is_remappable(Some(&trackpad)));
+
+    let apple_mouse = EventDevice {
+        vendor_id: Some(0x05ac),
+        product_id: Some(0x030d),
+        product_name: Some("Magic Mouse".into()),
+    };
+    assert!(!source_is_remappable(Some(&apple_mouse)));
+
+    let logi = EventDevice {
+        vendor_id: Some(LOGITECH_VENDOR_ID),
+        product_id: Some(0xb034),
+        product_name: Some("MX Master 3S".into()),
+    };
+    assert!(source_is_remappable(Some(&logi)));
+
+    let logi_by_name = EventDevice {
+        vendor_id: None,
+        product_id: None,
+        product_name: Some("Logitech USB Receiver".into()),
+    };
+    assert!(source_is_remappable(Some(&logi_by_name)));
+}
+
+/// On unsupported targets (not macOS, Linux, or Windows), `Hook::start`
+/// returns `Unsupported`. The cfg predates the Windows port (#167) — Windows
+/// belongs with the supported targets below, where this stale form made
+/// `cargo test` fail on every real Windows box.
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+#[test]
+fn unsupported_start_returns_unsupported() {
+    use std::assert_matches;
+
+    // Asserted via `.err()` because `Hook` itself has no `Debug` impl to print.
+    let result = Hook::start(|_| EventDisposition::PassThrough);
+    assert_matches!(result.err(), Some(HookError::Unsupported));
+}
+
+/// On Linux and Windows, `Hook::start` never returns `Unsupported` — it either
+/// succeeds (`WH_MOUSE_LL` needs no grant on Windows) or returns a
+/// platform-specific error (e.g. `NoDeviceFound` in a headless Linux CI env).
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[test]
+fn supported_start_does_not_return_unsupported() {
+    let result = Hook::start(|_| EventDisposition::PassThrough);
+    assert!(
+        !matches!(result, Err(HookError::Unsupported)),
+        "Hook::start returned Unsupported on a supported platform"
+    );
+    // Clean up if a hook was actually installed.
+    if let Ok(hook) = result {
+        hook.stop();
+    }
+}
+
+/// On non-macOS targets, `Hook::has_accessibility` is always `true`.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn non_macos_has_accessibility_is_true() {
+    assert!(Hook::has_accessibility());
+}
+
+/// Build an `EventTapInfo` with the given owner name and tap properties,
+/// defaulting the fields the conflict logic doesn't read.
+fn tap(owner: Option<&str>, location: TapLocation, active: bool, enabled: bool) -> EventTapInfo {
+    EventTapInfo {
+        tap_id: 1,
+        location,
+        active,
+        enabled,
+        owner_pid: 100,
+        owner_name: owner.map(str::to_owned),
+        target_pid: None,
+    }
+}
+
+/// `gates_input` is true only for an enabled, active, HID-level tap.
+#[test]
+fn gates_input_requires_active_enabled_hid() {
+    assert!(tap(None, TapLocation::Hid, true, true).gates_input());
+    // listen-only, disabled, or session-level cannot stall the HID stream.
+    assert!(!tap(None, TapLocation::Hid, false, true).gates_input());
+    assert!(!tap(None, TapLocation::Hid, true, false).gates_input());
+    assert!(!tap(None, TapLocation::Session, true, true).gates_input());
+}
+
+/// Known third-party input drivers are matched case-insensitively by owner
+/// executable name; unrelated owners and missing names return `None`.
+#[test]
+fn known_input_conflict_matches_curated_list() {
+    let hid = |owner| tap(Some(owner), TapLocation::Hid, true, true);
+    assert_eq!(
+        hid("logioptionsplus_agent").known_input_conflict(),
+        Some("Logi Options+")
+    );
+    // Case-insensitive, and substring of a longer path component.
+    assert_eq!(
+        hid("BetterMouse").known_input_conflict(),
+        Some("BetterMouse")
+    );
+    assert_eq!(hid("SteerMouse").known_input_conflict(), Some("SteerMouse"));
+    assert_eq!(hid("Raycast").known_input_conflict(), None);
+    assert_eq!(
+        tap(None, TapLocation::Hid, true, true).known_input_conflict(),
+        None
+    );
+}

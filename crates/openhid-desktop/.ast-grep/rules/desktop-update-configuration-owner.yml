@@ -1,0 +1,17 @@
+# Owner: platform::updater decides whether an update service is configured.
+id: desktop-update-configuration-owner
+language: Rust
+severity: error
+message: Ask platform::updater::updates_configured() for availability; manifest_host() is for displaying the configured host.
+files:
+  - crates/openhid-desktop/**/*.rs
+ignores:
+  - crates/openhid-desktop/src/platform/updater.rs
+rule:
+  any:
+    - all:
+        - kind: call_expression
+        - regex: 'manifest_host\(\)\.is_(ok|err)\(\)'
+    - all:
+        - kind: macro_invocation
+        - regex: '(option_env|env)!\("OPENHID_UPDATE_MANIFEST_URL"\)'

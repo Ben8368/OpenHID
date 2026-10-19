@@ -1,0 +1,30 @@
+{
+  "fill": {
+    "solid": "extended-srgb:0.07451,0.16863,0.23137,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "OpenHID-1.png",
+          "name": "OpenHID-1"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": true,
+        "value": 0.1
+      }
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": "shared"
+  }
+}

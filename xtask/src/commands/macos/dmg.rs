@@ -1,0 +1,91 @@
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context as _, Result};
+use clap::Parser;
+use xshell::{Shell, cmd};
+
+use strum::VariantArray as _;
+
+use super::bundle::identity::{self, Channel, Component};
+use crate::support::fs::{absolutize, ensure_command, ensure_dir, repo_root};
+
+#[derive(Parser)]
+pub(crate) struct Args {
+    /// App bundle to package.
+    #[arg(long, default_value = "target/release/bundle/osx/OpenHID.app")]
+    pub(crate) app: PathBuf,
+    /// Output DMG path.
+    #[arg(long, default_value = "target/release/OpenHID.dmg")]
+    pub(crate) output: PathBuf,
+    /// Developer ID identity used to sign the DMG, and the app when packaging.
+    #[arg(long, env = super::bundle::SIGN_IDENTITY_ENV)]
+    pub(crate) sign_identity: Option<String>,
+    /// Branded DMG background URL.
+    #[arg(long, env = "OPENHID_DMG_BACKGROUND_URL")]
+    pub(crate) background_url: Option<String>,
+}
+
+pub(crate) fn run(args: &Args) -> Result<()> {
+    let root = repo_root()?;
+    let sh = Shell::new()?;
+    let _repo = sh.push_dir(&root);
+    let app = absolutize(&root, &args.app);
+    let output = absolutize(&root, &args.output);
+    ensure_dir(&app)?;
+    // Signing makes this DMG a distribution artifact, so the bundle inside it
+    // must wear the shipped identity no matter which command built it. A dev
+    // bundle that reached users would void their permission grants and move
+    // them to a different config directory.
+    if args.sign_identity.is_some() {
+        identity::verify(&app, Channel::Production, Component::VARIANTS)
+            .context("a signed DMG must contain a production-identity app bundle")?;
+    }
+    ensure_command("create-dmg")?;
+
+    println!("==> dmg background");
+    let background = root.join("target/release/dmg-background.png");
+    if let Some(parent) = background.parent() {
+        fs_err::create_dir_all(parent)
+            .with_context(|| format!("could not create {}", parent.display()))?;
+    }
+    if let Some(background_url) = &args.background_url {
+        cmd!(sh, "curl -fsSL {background_url} -o {background}")
+            .run()
+            .with_context(|| format!("failed to fetch DMG background from {background_url}"))?;
+    } else {
+        fs_err::copy(root.join("design/bg/openhid-dmg.png"), &background)?;
+    }
+
+    println!("==> dmg");
+    if output.exists() {
+        fs_err::remove_file(&output)
+            .with_context(|| format!("could not remove {}", output.display()))?;
+    }
+
+    // Geometry is locked to the painted 760×480 background. `create-dmg` uses
+    // outer window dimensions, so add the 32pt Finder title bar and keep icon
+    // coordinates relative to the 760×480 content area.
+    // ULMO (LZMA) compresses ~20% smaller than the default UDZO (zlib) and
+    // mounts on macOS 10.15+, well under the bundle's 13.0 floor.
+    cmd!(
+        sh,
+        "create-dmg --format ULMO --volname OpenHID --background {background} --window-pos 240 120 --window-size 760 512 --icon-size 128 --icon OpenHID.app 212 250 --app-drop-link 548 250 --hide-extension OpenHID.app {output} {app}"
+    )
+    .run()?;
+
+    if let Some(identity) = &args.sign_identity {
+        sign_dmg(identity, &output)?;
+    }
+
+    println!();
+    println!("done → {}", output.display());
+    Ok(())
+}
+
+fn sign_dmg(identity: &str, dmg: &Path) -> Result<()> {
+    let sh = Shell::new()?;
+    println!("==> codesign dmg ({identity})");
+    cmd!(sh, "codesign --force --timestamp --sign {identity} {dmg}").run()?;
+    cmd!(sh, "codesign --verify --verbose=2 {dmg}").run()?;
+    Ok(())
+}

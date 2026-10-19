@@ -1,0 +1,21 @@
+[package]
+publish = false
+name = "openhid"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "OpenHID command-line interface — a local-first companion for Logitech HID++ peripherals."
+keywords = ["logitech", "hidpp", "hid", "mouse", "cli"]
+categories = ["command-line-utilities", "hardware-support"]
+readme = "../../README.md"
+
+[dependencies]
+openhid-cli = { path = "../openhid-cli", version = "0.8.14" }
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[lints]
+workspace = true

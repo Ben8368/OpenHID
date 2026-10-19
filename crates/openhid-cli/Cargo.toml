@@ -1,0 +1,38 @@
+[package]
+publish = false
+name = "openhid-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Implementation library for the OpenHID CLI (the `openhid` binary)."
+keywords = ["logitech", "hidpp", "hid", "mouse", "cli"]
+categories = ["command-line-utilities", "hardware-support"]
+
+[dependencies]
+openhid-core = { path = "../openhid-core", version = "0.8.14", features = ["logging", "worker"] }
+openhid-device = { path = "../openhid-device", version = "0.8.14" }
+openhid-fixture = { workspace = true, features = ["fs"] }
+openhid-hid = { path = "../openhid-hid", version = "0.8.14" }
+openhid-camera = { path = "../openhid-camera", version = "0.8.14" }
+openhid-assets = { path = "../openhid-assets", version = "0.8.14" }
+openhid-ipc = { path = "../openhid-ipc", version = "0.8.14" }
+atomic-write-file = { workspace = true }
+tarpc = { workspace = true }
+png = "0.17"
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+futures = "0.3"
+openhid-ipc = { path = "../openhid-ipc", version = "0.8.14", features = ["test-support"] }
+tempfile = "3"
+
+[lints]
+workspace = true

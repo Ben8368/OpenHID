@@ -1,0 +1,90 @@
+# openhid-desktop — the settings app
+
+The GPUI + gpui-component window users actually open: device gallery, per-device
+panels, Settings, pairing. It is one of three processes in the bundle and the
+only one with a settings UI.
+
+This file is the crate's contract and map. Read
+[`.agents/rules/gui.md`](../../.agents/rules/gui.md) before GUI work: it loads the
+upstream GPUI skills and lists OpenHID integration constraints. Workspace
+standards and checks are in the root [`AGENTS.md`](../../AGENTS.md).
+
+## The hard contract: this crate never touches a device
+
+`openhid-desktop` is a **pure IPC client**. The agent owns the input hook and
+every byte of HID++ I/O; this crate reads and writes device state only by
+calling the agent over tarpc.
+
+When a panel needs a device value the app cannot currently see, the fix is a new
+call in `openhid-ipc` plus a handler in `openhid-agent`/`openhid-agent-core`
+— never an `openhid-hid` call from here, and never a "just this once" direct
+read. Wire changes are append-only and versioned; see
+[`crates/openhid-ipc/AGENTS.md`](../openhid-ipc/AGENTS.md).
+
+Two more things this crate is not:
+
+- **Not the overlay's parent.** `openhid-overlay` is a *sibling* process. It
+  links `openhid-ui`, never this crate. Anything both frontends need moves into
+  `openhid-ui`; evaluate dependencies there against both consumers.
+- **Not a home for shared presentation.** Shared icons, colors, and locale
+  catalogs live in `openhid-ui`. Pure ring geometry and locale negotiation live
+  in `openhid-core`. What only the settings app draws stays here.
+
+## Map of `src/`
+
+| Path | What lives there |
+|---|---|
+| `main.rs` | Process bootstrap **only** — logging, single-instance guard, config, locale, the IPC client, then `gpui::run`. It also defines the `tr!` macro above the `mod` declarations, which is why every submodule gets `tr!` without an import (textual macro scope). |
+| `runtime.rs` | Everything the app does that isn't a render: one task, one `select!` arm per source that can change long-lived state (agent updates, camera scan, asset commands, finished downloads, `openhid://` deeplinks). |
+| `app.rs`, `app/` | The main window's shell — home gallery, device detail, menu bar, status line, deeplink handling. |
+| `windows.rs`, `windows/` | The windows themselves plus the registry that keeps each a singleton. About and Updates are **pages inside Settings**, not windows of their own. |
+| `features/` | One module per device-feature panel: `mouse`, `pointer`, `keyboard`, `lighting`, `camera`, `action_ring`, `profiles` — plus `binding_editor`, the binding-editor chrome the mouse, keyboard, profile and Actions Ring editors share. |
+| `state.rs`, `state/` | `AppState`, the GPUI global every view reads. Anything two views share belongs here; per-component scratch (hover index, open popover) stays in the owning entity. |
+| `services/` | Infrastructure, not UI: the IPC client, asset resolution and download, device reads, diagnostics, i18n. |
+| `ui/` | Shared components and the hand-painted `Palette` (`theme.rs`). |
+| `platform/` | OS integration — app icon, OS facts, updater. |
+| `app_assets.rs` | The GPUI asset source, composed in order: embedded logo → `openhid-ui`'s `action-icons/` → gpui-component's bundled lucide set. A new icon path that resolves nowhere renders blank rather than failing to build. |
+
+Panel selection and settings writes follow `.agents/rules/gui.md`.
+
+## Running and verifying
+
+- `cargo run -p openhid-desktop` — a cargo runner wraps the build into
+  `target/dev/OpenHID.app` with the identity, helpers and plist tables
+  packaging uses. **`cargo build` does not refresh that bundle**, and a second
+  instance exits on the singleton lock: quit the running app and re-`run` before
+  judging a UI change "not applied".
+- The window shows only the empty state unless an agent is running. With no
+  hardware, `cargo run -p openhid-agent --bin openhid-agent-mock` serves a
+  scripted inventory.
+- `OPENHID_COMPONENT_GALLERY=1` on a debug build opens `ui/gallery.rs` instead
+  of the app — every shared component rendered without app state. **When you
+  change a reusable component, update its gallery entry in the same commit**;
+  the gallery is not covered by tests and silently drifts from production
+  otherwise.
+- The macOS build needs full Xcode for GPUI's Metal shaders. devenv sets the
+  environment when Xcode is present (`direnv reload` if the shader compile
+  fails).
+
+## Build inputs that are not source
+
+- `build.rs` asks `cargo metadata` where gpui-component's source actually sits
+  and copies its `themes/` into `OUT_DIR`, because the compiled crate does not
+  ship them. **Do not vendor copies of those themes into this repo.**
+  `OPENHID_THEMES_DIR` overrides the lookup.
+- `themes/openhid.json` is the app's own theme, layered on that upstream set.
+- `bundle/` holds `OpenHID.entitlements` and one `Info.plist` per bundled
+  binary (`desktop-dev`, `agent-release`, `overlay-release`). `cargo xtask`
+  packaging reads them; they are the app's macOS identity, not decoration —
+  changing one changes what TCC sees. See
+  [`xtask/AGENTS.md`](../../xtask/AGENTS.md).
+
+## Related rules
+
+| When you touch | Read |
+|---|---|
+| any `.rs` here (GPUI house style) | [`.agents/rules/gui.md`](../../.agents/rules/gui.md) |
+| `services/i18n.rs`, any user-facing string | [`.agents/rules/i18n.md`](../../.agents/rules/i18n.md) |
+| anything crossing the agent boundary | [`crates/openhid-ipc/AGENTS.md`](../openhid-ipc/AGENTS.md) |
+| `platform/**` or any macOS FFI | [`.agents/rules/objc-ffi.md`](../../.agents/rules/objc-ffi.md) |
+| a permission symptom or the bundle identity | [`.claude/skills/openhid-macos-permissions/SKILL.md`](../../.claude/skills/openhid-macos-permissions/SKILL.md) |

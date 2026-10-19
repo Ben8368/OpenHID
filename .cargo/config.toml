@@ -1,0 +1,27 @@
+# macOS-only: force rustc to use Apple's real `/usr/bin/cc` as the linker
+# driver. Nix's wrapped clang (used in the devenv shell) ignores `SDKROOT`,
+# so link-time `-syslibroot` doesn't get set to the real Xcode SDK and core
+# libc symbols (`_write`, `_sysconf`, `_waitpid`, ...) referenced from
+# `libstd` go unresolved against the Nix stub SDK. Apple's cc honors
+# SDKROOT and links libSystem from the right SDK.
+#
+# Non-devenv contributors on macOS aren't affected by this — `/usr/bin/cc`
+# is already what their cargo would pick.
+[target.'cfg(target_os = "macos")']
+linker = "/usr/bin/cc"
+
+# Dev ergonomics: launch the desktop build from inside a throwaway
+# `OpenHID.app` so macOS shows the real app name + Dock icon during
+# development (both are read from a bundle's Info.plist / Resources, which a
+# bare `cargo run` binary lacks). The runner is a transparent passthrough for
+# the CLI, tests, and every other binary — only `openhid-desktop` is wrapped.
+# A path with a separator is resolved relative to the parent of the directory
+# holding this config file — the repo root — so it works from any cwd.
+runner = ".cargo/run-macos.sh"
+
+# Let xcode-select or an exported DEVELOPER_DIR select the Apple toolchain.
+# A fixed Xcode.app path breaks non-GUI builds with only Command Line Tools.
+# GUI builds require full Xcode with the Metal Toolchain.
+
+[alias]
+xtask = "run -p xtask --"

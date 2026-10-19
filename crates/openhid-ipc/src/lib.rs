@@ -1,0 +1,21 @@
+//! The agent↔GUI IPC contract.
+//!
+//! The tarpc service definition and the wire types it carries are re-exported
+//! at this crate's root; [`transport`] is the cross-platform local-socket
+//! transport that carries them, and [`client`] is how every client reaches an
+//! agent over it — the connect handshake, the protocol-version policy, and the
+//! observe loop's connection state live there once rather than in each consumer. This is a
+//! leaf crate — it depends on `openhid-core` and nothing else internal to the
+//! workspace — so the GUI (a pure IPC client) can pull in the wire contract
+//! without linking `openhid-hid`/`hidpp`/`async-hid`. The agent-side runtime
+//! that answers these RPCs (hook runtime, device I/O, the Actions Ring's
+//! session state, …) stays in `openhid-agent-core`, which depends on this
+//! crate rather than the other way around.
+
+pub mod client;
+mod ipc;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
+pub mod transport;
+
+pub use ipc::*;

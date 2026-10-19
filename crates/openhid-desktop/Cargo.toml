@@ -1,0 +1,104 @@
+[package]
+name = "openhid-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "GPUI-based desktop UI for OpenHID."
+default-run = "openhid-desktop"
+# Distributed as a bundled app; Kit stays Git-pinned to embed its full themes.
+publish = false
+
+[[bin]]
+name = "openhid-desktop"
+path = "src/main.rs"
+
+[dependencies]
+appcatalog = "0.1.1"
+openhid-core = { path = "../openhid-core", features = ["logging", "worker"] }
+openhid-ui = { path = "../openhid-ui" }
+openhid-camera = { path = "../openhid-camera" }
+openhid-hook = { path = "../openhid-hook" }
+openhid-assets = { path = "../openhid-assets" }
+openhid-ipc = { path = "../openhid-ipc" }
+openhid-permissions = { path = "../openhid-permissions" }
+tarpc = { workspace = true }
+gpui = { workspace = true }
+gpui_platform = { workspace = true }
+gpui-component = { workspace = true }
+gpui-base = { workspace = true }
+gpui-kit-assets = { workspace = true }
+swr-core = { workspace = true }
+swr-gpui = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "process"] }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
+rust-i18n = "4"
+# The raw, un-negotiated system locale for the diagnostics report; locale
+# *negotiation* lives in openhid-ui.
+sys-locale = "0.3.2"
+gpui-updater = { package = "gpui-updater-pre", version = "0.2" }
+# Drives updates through the Sparkle.framework `xtask macos package` embeds in
+# the release bundle. Sparkle is loaded at run time, so this builds — and is
+# inert — on every platform and in an unbundled `cargo run`.
+gpui-updater-sparkle = "0.2"
+# Spawns the agent under its own macOS TCC identity (see ipc_client::spawn_agent).
+disclaim = "0.1"
+url = "2.5.8"
+walkdir = "2.5.0"
+opener = { workspace = true }
+derive_more = { version = "2.1.1", default-features = false, features = ["display", "from"] }
+# The user-picked app icon (Settings -> Appearance). Cross-platform: every
+# call is inert off macOS, which is the only OS that can change an installed
+# app's icon after the fact.
+appicon = { git = "https://github.com/AprilNEA/appicon", tag = "v0.1.1" }
+
+[build-dependencies]
+embed-resource = "3.0.9"
+serde_json.workspace = true
+
+# Window chrome, host OS string, and installed-app icon lookup only — the
+# menu-bar status item lives in the agent, not here.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true, features = ["NSApplication", "NSAppearance"] }
+objc2-foundation = { workspace = true, features = ["NSProcessInfo", "NSString", "NSError"] }
+objc2-service-management = { workspace = true, features = ["std", "SMAppService", "SMErrors", "objc2", "objc2-foundation"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.55"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+openhid-ipc = { path = "../openhid-ipc", features = ["test-support"] }
+gpui = { workspace = true, features = ["test-support"] }
+openhid-device = { path = "../openhid-device" }
+openhid-fixture = { workspace = true, features = ["fs"] }
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["test-util"] }
+
+[package.metadata.bundle]
+name = "OpenHID"
+identifier = "org.openhid.openhid"
+# No `version` override — cargo-bundle falls back to the crate version, which
+# is workspace-unified. A literal here goes stale the moment release-plz bumps.
+category = "public.app-category.utilities"
+short_description = "Lightweight local-first companion for Logitech HID++ peripherals."
+long_description = """\
+OpenHID talks to Logitech HID++ mice and keyboards directly — no \
+cloud account, no telemetry, no auto-update poller. Plain TOML config, \
+single binary; device renders are fetched on demand on first launch.
+"""
+icon = ["icon/AppIcon.icns"]
+resources = ["assets/**/*"]
+# No macOS keys: cargo-bundle 0.11 reads them only as flat `osx_*` keys and
+# 0.12 only from a `[package.metadata.bundle.osx]` table, rejecting the other
+# spelling. `xtask macos package` stamps the minimum macOS version and the
+# `openhid://` URL type itself (`support::info_plist`).

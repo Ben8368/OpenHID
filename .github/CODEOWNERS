@@ -1,0 +1,59 @@
+# Code owners for Ben8368/OpenHID.
+#
+# This is a personal repository, so every owner must be an individual account
+# with write access — `@org/team` entries do not exist here, and an owner
+# without write access is silently ignored by GitHub. Grant write access
+# before adding someone below.
+#
+# The last matching pattern wins. Shared ownership applies unless a later
+# rule requires AprilNEA's review.
+
+# ── Default ────────────────────────────────────────────────────────────────
+*                               @Ben8368 @davidbudnick
+
+# ── Release, packaging, supply chain ───────────────────────────────────────
+# These paths control release credentials, packaging, dependencies, or build
+# and verification commands.
+/.github/                       @Ben8368
+/xtask/                         @Ben8368
+/packaging/                     @Ben8368
+/.config/                       @Ben8368
+/.cargo/                        @Ben8368
+**/.ast-grep/                   @Ben8368
+/.envrc                         @Ben8368
+/sgconfig.yml                   @Ben8368
+**/Cargo.toml                   @Ben8368
+**/build.rs                     @Ben8368
+/Cargo.lock                     @Ben8368
+/release-plz.toml               @Ben8368
+/rust-toolchain.toml            @Ben8368
+/rustfmt.toml                   @Ben8368
+/prek.toml                      @Ben8368
+/flake.nix                      @Ben8368
+/flake.lock                     @Ben8368
+/devenv.nix                     @Ben8368
+/devenv.yaml                    @Ben8368
+/devenv.lock                    @Ben8368
+
+# ── Update verification ───────────────────────────────────────────────────
+/crates/openhid-desktop/src/platform/updater.rs @Ben8368
+
+# ── Licensing and brand ────────────────────────────────────────────────────
+# design/ is proprietary; the license files define the dual-license boundary.
+/LICENSE-MIT                    @Ben8368
+/LICENSE-APACHE                 @Ben8368
+/design/                        @Ben8368
+
+# ── Cross-crate contracts ──────────────────────────────────────────────────
+# openhid-ipc is an append-only wire format, openhid-core is the shared
+# config and device model, openhid-hidpp is a hard fork with its own rules.
+/crates/openhid-ipc/           @Ben8368
+/crates/openhid-core/          @Ben8368
+/crates/openhid-hidpp/         @Ben8368
+/crates/openhid-hidpp-derive/  @Ben8368
+
+# ── Agent guides ───────────────────────────────────────────────────────────
+**/AGENTS.md                    @Ben8368
+**/CLAUDE.md                    @Ben8368
+/.claude/                       @Ben8368
+/.agents/                       @Ben8368

@@ -1,0 +1,325 @@
+# Installing OpenHID on Linux
+
+> [!NOTE]
+> Linux support is in active development. HID++ device enumeration supports
+> **Logi Bolt** (USB PID `0xC548`) and **Logi Unifying** (PID `0xC52B` and
+> others) receivers, as well as Bluetooth-direct devices.
+
+## Prerequisites
+
+- **Quit Solaar** (or any other Logitech manager) before starting OpenHID — the
+  two applications fight over HID++ access.
+- A kernel with `hidraw` and `uinput` module support (standard on all major
+  distros).
+- `systemd` + `udev` (standard on Ubuntu, Fedora, Arch, Debian, openSUSE, …).
+- GLIBC 2.35 or newer for the pre-built packages (Ubuntu 22.04 baseline).
+- `minisign`, installed through your distribution's package manager, for
+  authenticating release packages.
+
+## Install a release package
+
+Download the installer to a file over HTTPS, inspect it, and then run it. Do
+not use `curl | sh`:
+
+```sh
+curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+  --fail --location --silent --show-error \
+  --retry 3 --retry-connrefused \
+  --output openhid-install.sh \
+  https://raw.githubusercontent.com/Ben8368/OpenHID/master/packaging/linux/install.sh
+less openhid-install.sh
+sh openhid-install.sh
+rm openhid-install.sh
+```
+
+By default the script resolves the latest GitHub release, detects
+`x86_64`/`aarch64` and apt, dnf, yum, zypper, rpm, or pacman, then downloads
+the exact matching `.deb`, `.rpm`, or `.pkg.tar.zst`. It downloads that
+package's detached signature and authenticates it against the minisign public
+key embedded in the reviewed script. It also downloads the release's
+`SHA256SUMS`, extracts exactly one entry for the selected file, and verifies it
+before invoking only the package-manager command with `sudo`.
+nFPM's package scripts remain responsible for reloading udev and desktop/icon
+caches. Run the installer as your normal user; it refuses an invocation of the
+whole script through `sudo`.
+
+Useful options:
+
+```sh
+# Pin a release (an optional leading v is accepted):
+sh openhid-install.sh --version "$VERSION"
+
+# Override detection, verify without installing, or leave the agent stopped:
+sh openhid-install.sh --package-manager zypper
+sh openhid-install.sh --dry-run
+sh openhid-install.sh --no-start
+```
+
+The installer enables and starts `openhid-agent.service` for the current user
+when systemd is available; failure to reach the user service manager does not
+roll back an otherwise successful package installation. Tagged releases with
+a complete Linux build also attach `install.sh`, `install.sh.minisig`, and a
+`SHA256SUMS` entry for manual verification.
+
+## NixOS
+
+The repository Flake provides a package and a NixOS module for x86_64 and
+aarch64 Linux. Importing the module is preferred over adding the package to
+`environment.systemPackages` by itself: the module also registers the udev
+rules required for device access and manages the agent's user service.
+
+```nix
+{
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.openhid = {
+    url = "github:Ben8368/OpenHID";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+
+  outputs = { nixpkgs, openhid, ... }: {
+    nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux"; # or aarch64-linux
+      modules = [
+        openhid.nixosModules.default
+        {
+          programs.openhid = {
+            enable = true;
+            # Starts openhid-agent with graphical-session.target by default.
+            launchAtLogin = true;
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+Set `programs.openhid.launchAtLogin = false` to install the package and udev
+rules without automatically starting the agent. It remains available as
+`systemctl --user start openhid-agent.service`.
+
+For a build without installing the module:
+
+```sh
+nix build github:Ben8368/OpenHID#openhid
+```
+
+## Flatpak
+
+Each release carries a `.flatpak` bundle for `amd64` and `arm64`, on the
+[releases page](https://github.com/Ben8368/OpenHID/releases/latest):
+
+```sh
+flatpak install --user ./openhid-*.flatpak
+```
+
+It is a one-time install. There is no remote behind a bundle, so `flatpak
+update` has nothing to check and a new version means downloading the next one.
+
+> [!IMPORTANT]
+> A Flatpak cannot write to `/etc`, so the udev rules have to be installed on
+> the host separately. **Until you do, no devices are detected at all**: the
+> sandbox is allowed to reach `/dev/hidraw*`, `/dev/uinput` and
+> `/dev/input/event*`, but the kernel still refuses your user access to them,
+> so the app opens to an empty device list.
+
+The same rules the packages install ship inside the app, so this needs no
+checkout and no extra download:
+
+```sh
+flatpak run --command=cat org.openhid.OpenHID \
+  /app/share/openhid/udev/70-openhid.rules |
+  sudo tee /etc/udev/rules.d/70-openhid.rules >/dev/null
+
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+Nothing extra is needed for `/dev/uinput`: the rules create its node at boot
+with `static_node=uinput`, and opening it loads the module. See
+[Device access: udev rules](#device-access-udev-rules) for what the rules grant
+and how to verify them.
+
+The agent installs its input hook once at startup, so restart the app after
+granting access:
+
+```sh
+flatpak kill org.openhid.OpenHID
+```
+
+Then launch it again. There is no user service to enable — unlike the packages,
+the application launches its own agent.
+
+## Build from source
+
+Pre-built `.deb` and `.rpm` packages are available on the
+[releases page](https://github.com/Ben8368/OpenHID/releases/latest) — see
+the main [README](../README.md#linux) for the package-based install. To build
+from source instead, use the stable Rust toolchain:
+
+```sh
+git clone https://github.com/Ben8368/OpenHID
+cd OpenHID
+cargo build --release \
+  -p openhid -p openhid-desktop -p openhid-overlay -p openhid-agent
+```
+
+Four production executables land in `target/release/`:
+
+| Binary | Role |
+|---|---|
+| `openhid` | CLI — inventory, diagnostics, asset sync |
+| `openhid-desktop` | Desktop GUI |
+| `openhid-overlay` | Actions Ring overlay helper |
+| `openhid-agent` | Background agent — HID++ loop, input hook |
+
+## Device access: udev rules
+
+OpenHID needs:
+
+- **Write access to `/dev/uinput`** — to create the virtual input device for
+  button remapping.
+- **Read/write access to `/dev/hidraw*`** — to send HID++ commands to the Bolt
+  receiver, or to the device itself when it is paired over Bluetooth.
+- **Read access to the mouse's `/dev/input/event*` node** — the hook grabs the
+  pointer there to capture button presses. Bluetooth mice need the bundled rule
+  for this: their event node hangs off `/devices/virtual/misc/uhid`, which has
+  no seat, so `logind` never grants the ACL on its own.
+
+Install the bundled udev rules to grant access to the active-seat user without
+requiring `sudo` or group membership (requires `systemd-logind`):
+
+```sh
+sudo cp packaging/linux/udev/70-openhid.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+Verify access (should open without error):
+
+```sh
+# Check uinput
+openhid-agent --check-uinput 2>/dev/null || \
+    test -w /dev/uinput && echo "uinput OK"
+
+# Check a hidraw node
+ls -la /dev/hidraw*
+
+# Check the mouse's event node — look for a "+" (ACL) in the mode, or your
+# user in the ACL itself. Without it the agent logs
+# "could not install OS mouse hook".
+getfacl /dev/input/event*
+```
+
+The GUI Settings → Permissions page shows a live `Granted` / `Not granted`
+indicator; check it after installing the rules (no restart needed).
+
+> **Device already connected?** `udevadm trigger` re-evaluates rules but does
+> not re-grant `uaccess` ACLs on nodes that were already open when the rules
+> were installed. If access is still denied, unplug and replug your receiver or
+> mouse (or power-cycle for wireless devices) to let udev apply the new rules on
+> reconnect.
+
+### Non-systemd systems (SysV init, OpenRC)
+
+Replace `TAG+="uaccess"` in the rules file with `MODE="0660", GROUP="input"`,
+then add your user to the `input` group:
+
+```sh
+sudo usermod -aG input "$USER"
+# Re-login for the group change to take effect.
+```
+
+## Install from source with the script
+
+From a repository checkout, `--from-source` copies the four local
+`target/release` binaries, udev rules, systemd unit, desktop entry, and icon to
+system paths, then reloads udev and desktop/icon caches. The script requests
+`sudo` only for system files and lifecycle commands; do not run the whole
+installer with `sudo`. `--prefix` applies only to this mode.
+
+```sh
+# From the repo root, after building:
+packaging/linux/install.sh --from-source
+# Or to a custom prefix (e.g. /usr):
+packaging/linux/install.sh --from-source --prefix=/usr
+```
+
+To remove a source installation (release packages should be removed through
+their package manager):
+
+```sh
+packaging/linux/uninstall.sh
+```
+
+## Autostart (launch at login)
+
+The background agent (`openhid-agent`) must be running for the GUI and CLI to
+show connected devices. Enable it for your user session:
+
+```sh
+systemctl --user enable --now openhid-agent.service
+```
+
+Alternatively, toggle **Settings → General → Launch at login** in the GUI. When
+a packaged unit is already installed it simply enables that one. Otherwise — a
+build from source, or an install under a custom prefix — it generates a unit at
+`~/.local/share/systemd/user/openhid-agent.service` pointing at the running
+binary.
+
+Either way `~/.config/systemd/user/openhid-agent.service` stays yours: systemd
+ranks it above both locations, so a unit you write there overrides whatever
+OpenHID does. Use `systemctl --user edit openhid-agent.service` for a drop-in
+that survives package upgrades.
+
+OpenHID never overwrites or deletes a unit it did not generate, at either
+location, and it only turns off an autostart it turned on. Enabling the service
+yourself with the command above keeps working regardless of the GUI toggle.
+
+## Verify the installation
+
+```sh
+# List connected Logitech devices:
+openhid list
+
+# Launch the GUI:
+openhid-desktop
+```
+
+## Hyprland and Omarchy
+
+When the agent runs inside a Hyprland session, native actions use the
+Hyprland/Omarchy-compatible commands below:
+
+| OpenHID action | Linux behavior |
+|---|---|
+| `LaunchpadShow` | `omarchy-menu toggle` |
+| `PreviousDesktop` | `hyprctl dispatch workspace e-1` |
+| `NextDesktop` | `hyprctl dispatch workspace e+1` |
+| `LockScreen` | `omarchy-system-lock` |
+
+The lock action never sends `Super+L` on Hyprland because Omarchy uses that
+shortcut to change the workspace layout. If an Omarchy helper is unavailable
+or exits unsuccessfully, OpenHID falls back to the corresponding compositor
+shortcut; the lock fallback is `Super+Ctrl+L`.
+
+The agent selects this behavior when `HYPRLAND_INSTANCE_SIGNATURE` is present.
+Because the agent normally runs as a systemd user service, verify that its
+manager environment contains both that variable and `XDG_RUNTIME_DIR`:
+
+```sh
+systemctl --user show-environment | \
+    grep -E '^(HYPRLAND_INSTANCE_SIGNATURE|XDG_RUNTIME_DIR)='
+```
+
+If either variable is missing, configure the session to import it into the
+systemd user manager before restarting `openhid-agent.service`. The helper
+executables are resolved from `/usr/bin` and `/usr/local/bin`; missing helpers
+use the keyboard fallbacks above.
+
+## Known limitations
+
+| Limitation | Status |
+|---|---|
+| Wayland: per-application profile switching | Requires XWayland (`WM_CLASS` lookup uses X11) |
+| Button capture: middle / mode-shift / thumbwheel | Side buttons only today |

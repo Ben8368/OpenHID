@@ -1,0 +1,439 @@
+//! Agent-side device pairing, exposed to the GUI over IPC.
+//!
+//! The agent owns all device I/O, so pairing — which opens the receiver — must
+//! run here: a GUI that opened a receiver channel would clash with the agent's
+//! live capture session on the same Bolt receiver (one process can't read the
+//! same HID node through two channels). The GUI drives this over IPC
+//! (`start_pairing` / `pair_device` / `cancel_pairing` + a `next_pairing`
+//! long-poll for the event stream).
+//!
+//! While a session runs, the agent holds an exclusive receiver lease through
+//! [`SharedHandles::receiver_access`], so `run_pairing` can own the receiver's
+//! HID node. Dropping that lease lets HID++ capture resume when the session ends
+//! (every end — including cancel — emits a terminal event).
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::time::Duration;
+
+use openhid_agent_core::observable::ObservableState;
+use openhid_agent_core::orchestrator::SharedHandles;
+use openhid_agent_core::receiver_access::{ExclusiveAccessReason, ExclusiveReceiverLease};
+use openhid_agent_core::watchers::pairing::{
+    self, PairingControl, PairingSessionEvent, PairingSessionId,
+};
+use openhid_hid::{DeviceRoute, DiscoveredDevice, PairingEvent, ReceiverSelector};
+use openhid_ipc::{FoundDevice, PairingCommandError, PairingFailure, PairingPhase, PairingUpdate};
+use tokio::sync::{Mutex, mpsc};
+use tracing::{info, warn};
+
+/// How long the agent holds a `next_pairing` long-poll before returning `None`.
+/// Comfortably under the client's request deadline so the agent answers first.
+const PAIRING_HOLD: Duration = Duration::from_secs(20);
+
+/// How long pairing waits for HID++ capture to release the receiver lease.
+const RECEIVER_LEASE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Address-keyed cache of the full discovered devices, so the GUI can pair by
+/// address without round-tripping the non-serializable `DiscoveredDevice`.
+type DeviceCache = HashMap<[u8; 6], DiscoveredDevice>;
+type SharedSessionOwner = Arc<StdMutex<SessionOwner>>;
+
+/// The one owner of pairing admission, live-session resources, and discovery.
+struct SessionOwner {
+    next_id: u64,
+    state: SessionState,
+}
+
+enum SessionState {
+    Idle,
+    Admitting(PairingSessionId),
+    Active(ActiveSession),
+}
+
+struct ActiveSession {
+    id: PairingSessionId,
+    devices: DeviceCache,
+    phase: ActivePhase,
+    _receiver_lease: ExclusiveReceiverLease,
+}
+
+enum ActivePhase {
+    Discovering,
+    /// A selection was admitted or a passkey received; discovery is closed.
+    Pairing,
+}
+
+impl Default for SessionOwner {
+    fn default() -> Self {
+        Self {
+            next_id: 0,
+            state: SessionState::Idle,
+        }
+    }
+}
+
+impl SessionOwner {
+    fn begin_admission(&mut self) -> Result<PairingSessionId, PairingCommandError> {
+        if !matches!(self.state, SessionState::Idle) {
+            return Err(PairingCommandError::AlreadyActive);
+        }
+        let id = PairingSessionId::new(self.next_id);
+        self.next_id = self.next_id.wrapping_add(1);
+        self.state = SessionState::Admitting(id);
+        Ok(id)
+    }
+
+    fn activate(&mut self, id: PairingSessionId, receiver_lease: ExclusiveReceiverLease) -> bool {
+        if !matches!(self.state, SessionState::Admitting(admitted) if admitted == id) {
+            return false;
+        }
+        self.state = SessionState::Active(ActiveSession {
+            id,
+            devices: HashMap::new(),
+            phase: ActivePhase::Discovering,
+            _receiver_lease: receiver_lease,
+        });
+        true
+    }
+
+    fn roll_back_admission(&mut self, id: PairingSessionId) {
+        if matches!(self.state, SessionState::Admitting(admitted) if admitted == id) {
+            self.state = SessionState::Idle;
+        }
+    }
+
+    fn active(&self) -> Option<&ActiveSession> {
+        match &self.state {
+            SessionState::Active(session) => Some(session),
+            SessionState::Idle | SessionState::Admitting(_) => None,
+        }
+    }
+
+    fn end(&mut self, id: PairingSessionId) -> bool {
+        if matches!(&self.state, SessionState::Active(session) if session.id == id) {
+            self.state = SessionState::Idle;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn abort(&mut self) -> bool {
+        if matches!(self.state, SessionState::Idle) {
+            return false;
+        }
+        self.state = SessionState::Idle;
+        true
+    }
+}
+
+/// Owns the pairing watcher and translates its event stream for the IPC layer.
+pub struct PairingManager {
+    ctrl: mpsc::UnboundedSender<PairingControl>,
+    updates: Mutex<mpsc::UnboundedReceiver<PairingUpdate>>,
+    session: SharedSessionOwner,
+    shared: SharedHandles,
+    /// Where the session's progress is published for the GUI to observe. The
+    /// event channel above is the same information as a stream; this is the
+    /// form that survives a missed poll or a reconnect.
+    observable: Arc<ObservableState>,
+}
+
+impl PairingManager {
+    /// Spawn the pairing watcher and its event translator. One per agent; must
+    /// be called inside the tokio runtime (it spawns the translator task).
+    #[must_use]
+    pub fn new(shared: SharedHandles, observable: Arc<ObservableState>) -> Self {
+        let (ctrl, raw_events) = pairing::spawn_with_hardware(shared.hardware());
+        let (upd_tx, upd_rx) = mpsc::unbounded_channel();
+        let session = Arc::new(StdMutex::new(SessionOwner::default()));
+        tokio::spawn(translate(
+            raw_events,
+            upd_tx.clone(),
+            Arc::clone(&session),
+            Arc::clone(&observable),
+        ));
+        Self {
+            ctrl,
+            updates: Mutex::new(upd_rx),
+            session,
+            shared,
+            observable,
+        }
+    }
+
+    /// Begin a session: forget the previous discovery, pause capture, then start.
+    pub async fn start(&self, selector: ReceiverSelector) -> Result<(), PairingCommandError> {
+        if !self.shared.device_io.allows_io() {
+            return Err(PairingCommandError::ReceiverBusy);
+        }
+        let admission = match SessionAdmission::new(Arc::clone(&self.session)) {
+            Ok(admission) => admission,
+            Err(error) => {
+                debug_assert_eq!(error, PairingCommandError::AlreadyActive);
+                warn!("pairing start requested while a session is already active");
+                return Err(error);
+            }
+        };
+        let Ok(receiver_lease) = tokio::time::timeout(
+            RECEIVER_LEASE_TIMEOUT,
+            self.shared
+                .receiver_access
+                .acquire_exclusive(ExclusiveAccessReason::Pairing),
+        )
+        .await
+        else {
+            warn!("timed out waiting for receiver capture to stop; pairing not started");
+            return Err(PairingCommandError::ReceiverBusy);
+        };
+        admission.accept(receiver_lease, selector, &self.ctrl, &self.observable)
+    }
+
+    /// Remove the device `route` names from its receiver, then have inventory
+    /// rescan so the freed slot leaves the snapshot. Takes the receiver the
+    /// way a pairing session does, so it waits out capture and is refused
+    /// while a session holds the receiver.
+    pub async fn unpair(&self, route: &DeviceRoute) -> Result<(), PairingFailure> {
+        if !self.shared.device_io.allows_io() {
+            return Err(PairingFailure::ReceiverBusy);
+        }
+        let Ok(receiver_lease) = tokio::time::timeout(
+            RECEIVER_LEASE_TIMEOUT,
+            self.shared
+                .receiver_access
+                .acquire_exclusive(ExclusiveAccessReason::Pairing),
+        )
+        .await
+        else {
+            warn!(%route, "timed out waiting for the receiver; device not unpaired");
+            return Err(PairingFailure::ReceiverBusy);
+        };
+        let result = self.shared.hardware().unpair(route).await;
+        drop(receiver_lease);
+        match result {
+            Ok(()) => {
+                info!(%route, "device unpaired");
+                self.shared.request_receiver_rescan();
+                Ok(())
+            }
+            Err(error) => {
+                warn!(%route, %error, "unpair failed");
+                Err(error.into())
+            }
+        }
+    }
+
+    /// Pair with a previously discovered device by address.
+    pub fn pair(&self, address: [u8; 6]) -> Result<(), PairingCommandError> {
+        with_session_owner(&self.session, |owner| {
+            let SessionState::Active(session) = &mut owner.state else {
+                warn!(?address, "pair requested without an active session");
+                return Err(PairingCommandError::NoActiveSession);
+            };
+            let Some(device) = session.devices.get(&address).cloned() else {
+                warn!(?address, "pair requested for an unknown device");
+                return Err(PairingCommandError::UnknownDevice);
+            };
+            self.ctrl
+                .send(PairingControl::Pair {
+                    session: session.id,
+                    device,
+                })
+                .map_err(|_| PairingCommandError::WatcherUnavailable)?;
+            // Fence events already queued by the watcher under the same lock
+            // as event acceptance, and only after the command was sent.
+            session.phase = ActivePhase::Pairing;
+            self.observable.set_pairing(Some(PairingPhase::Pairing));
+            Ok(())
+        })
+    }
+
+    /// Cancel the in-progress session. The resulting `Failed(Cancelled)` event
+    /// releases the receiver lease via the translator — don't release it here, or
+    /// capture could re-acquire the receiver while `run_pairing` still holds it.
+    pub fn cancel(&self) -> Result<(), PairingCommandError> {
+        with_session_owner(&self.session, |owner| {
+            let Some(session) = owner.active() else {
+                // Nothing running, so this is the GUI dismissing a *finished*
+                // session's result. Clearing the phase is the whole job.
+                self.observable.set_pairing(None);
+                return Ok(());
+            };
+            self.ctrl
+                .send(PairingControl::Cancel {
+                    session: session.id,
+                })
+                .map_err(|_| PairingCommandError::WatcherUnavailable)
+        })
+    }
+
+    /// Long-poll the next pairing step; `None` when the hold window elapses.
+    pub async fn next_update(&self) -> Option<PairingUpdate> {
+        let mut rx = self.updates.lock().await;
+        tokio::time::timeout(PAIRING_HOLD, rx.recv())
+            .await
+            .ok()
+            .flatten()
+    }
+}
+
+fn with_session_owner<T>(
+    session: &SharedSessionOwner,
+    f: impl FnOnce(&mut SessionOwner) -> T,
+) -> T {
+    match session.lock() {
+        Ok(mut owner) => f(&mut owner),
+        Err(poisoned) => {
+            warn!("pairing session owner lock poisoned; recovering session state");
+            let mut owner = poisoned.into_inner();
+            f(&mut owner)
+        }
+    }
+}
+
+struct SessionAdmission {
+    owner: SharedSessionOwner,
+    id: PairingSessionId,
+    finished: bool,
+}
+
+impl SessionAdmission {
+    fn new(owner: SharedSessionOwner) -> Result<Self, PairingCommandError> {
+        let id = with_session_owner(&owner, SessionOwner::begin_admission)?;
+        Ok(Self {
+            owner,
+            id,
+            finished: false,
+        })
+    }
+
+    fn accept(
+        mut self,
+        receiver_lease: ExclusiveReceiverLease,
+        selector: ReceiverSelector,
+        ctrl: &mpsc::UnboundedSender<PairingControl>,
+        observable: &ObservableState,
+    ) -> Result<(), PairingCommandError> {
+        let result = with_session_owner(&self.owner, |owner| {
+            if !owner.activate(self.id, receiver_lease) {
+                warn!(session = ?self.id, "pairing admission changed before activation");
+                return Err(PairingCommandError::WatcherUnavailable);
+            }
+            // Publish before the watcher can emit a terminal result; otherwise
+            // this call could overwrite that result with `Searching`.
+            observable.set_pairing(Some(PairingPhase::Searching));
+            if let Err(error) = ctrl.send(PairingControl::Start {
+                session: self.id,
+                selector,
+            }) {
+                owner.end(self.id);
+                observable.set_pairing(None);
+                warn!(error = %error, "could not start pairing session; pairing watcher is unavailable");
+                return Err(PairingCommandError::WatcherUnavailable);
+            }
+            Ok(())
+        });
+        self.finished = true;
+        result
+    }
+}
+
+impl Drop for SessionAdmission {
+    fn drop(&mut self) {
+        if !self.finished {
+            with_session_owner(&self.owner, |owner| {
+                owner.roll_back_admission(self.id);
+            });
+        }
+    }
+}
+
+/// Translate one session-tagged event into the wire update and observable
+/// phase. Events from an ended session are ignored, including duplicate
+/// terminals, so they cannot clean up a replacement session.
+fn apply_session_event(
+    event: PairingSessionEvent,
+    session: &SharedSessionOwner,
+    observable: &ObservableState,
+) -> Option<PairingUpdate> {
+    with_session_owner(session, |owner| {
+        let active = match &mut owner.state {
+            SessionState::Active(active) if active.id == event.session => active,
+            _ => return None,
+        };
+        let update = match event.event {
+            PairingEvent::Searching | PairingEvent::DeviceFound(_)
+                if matches!(active.phase, ActivePhase::Pairing) =>
+            {
+                return None;
+            }
+            PairingEvent::Searching => PairingUpdate::Searching,
+            PairingEvent::DeviceFound(device) => {
+                let found = FoundDevice {
+                    address: device.address,
+                    name: device.name.clone(),
+                };
+                active.devices.insert(device.address, device);
+                PairingUpdate::DeviceFound(found)
+            }
+            PairingEvent::Passkey(method) => {
+                active.phase = ActivePhase::Pairing;
+                PairingUpdate::Passkey(method)
+            }
+            PairingEvent::Paired { slot } => PairingUpdate::Paired { slot },
+            PairingEvent::Failed(error) => PairingUpdate::Failed(error.into()),
+        };
+        match &update {
+            PairingUpdate::Searching => observable.set_pairing(Some(PairingPhase::Searching)),
+            PairingUpdate::DeviceFound(found) => observable.found_pairing_device(found.clone()),
+            PairingUpdate::Passkey(method) => {
+                observable.set_pairing(Some(PairingPhase::Passkey(method.clone())));
+            }
+            PairingUpdate::Paired { slot } => {
+                observable.set_pairing(Some(PairingPhase::Paired { slot: *slot }));
+            }
+            // A cancelled session leaves no result to show: the user asked it
+            // to stop, so the session simply stops existing.
+            PairingUpdate::Failed(PairingFailure::Cancelled) => observable.set_pairing(None),
+            PairingUpdate::Failed(failure) => {
+                observable.set_pairing(Some(PairingPhase::Failed(failure.clone())));
+            }
+        }
+        if matches!(
+            update,
+            PairingUpdate::Paired { .. } | PairingUpdate::Failed(_)
+        ) {
+            let ended = owner.end(event.session);
+            debug_assert!(ended, "matching active pairing session must end once");
+        }
+        Some(update)
+    })
+}
+
+/// Translate raw [`PairingSessionEvent`]s into wire [`PairingUpdate`]s and release the
+/// active session's receiver lease on its one terminal event.
+async fn translate(
+    mut raw: mpsc::UnboundedReceiver<PairingSessionEvent>,
+    upd_tx: mpsc::UnboundedSender<PairingUpdate>,
+    session: SharedSessionOwner,
+    observable: Arc<ObservableState>,
+) {
+    while let Some(event) = raw.recv().await {
+        let Some(update) = apply_session_event(event, &session, &observable) else {
+            continue;
+        };
+        if upd_tx.send(update).is_err() {
+            break;
+        }
+    }
+    // The watcher channel closed — its thread exited, most likely because its
+    // session panicked. Drop any admission/session resource so capture resumes.
+    if with_session_owner(&session, SessionOwner::abort) {
+        observable.set_pairing(None);
+    }
+}
+
+#[cfg(test)]
+mod tests;
