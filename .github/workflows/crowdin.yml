@@ -26,14 +26,14 @@ jobs:
   synchronize:
     name: Synchronize translations
     runs-on: ubuntu-latest
-    if: github.repository == 'AprilNEA/OpenLogi'
+    if: vars.OPENHID_CROWDIN_ENABLED == 'true'
 
     steps:
       # persist-credentials must stay false: checkout's default GITHUB_TOKEN
       # http.extraheader would win over the app token when we push crowdin/i18n
       # (403 as github-actions[bot] despite env GITHUB_TOKEN).
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 

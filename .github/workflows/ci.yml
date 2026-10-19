@@ -1,13 +1,14 @@
-name: CI
+name: Rust checks
 
 # Reproduce every job locally: `cargo xtask ci`
-# Job → command map: `.claude/rules/ci.md`
+# Job → command map: `.agents/rules/ci.md`
 # Changing a `run:` here without updating those two is a bug.
 
 on:
-  push:
-    branches: [main, master]
-  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
 
 # Cancel superseded runs on the same ref (rapid PR pushes / force-pushes).
 # Always cancel here: CI never signs or publishes artifacts.
@@ -24,7 +25,7 @@ env:
   # PR caches are isolated to refs/pull/*/merge and still consume the repo's
   # 10 GB allowance. Let PRs reuse master's compiler objects without filling
   # the cache with entries no other PR can read.
-  SCCACHE_GHA_RW_MODE: ${{ (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && 'READ_WRITE' || 'READ_ONLY' }}
+  SCCACHE_GHA_RW_MODE: ${{ (github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) && 'READ_WRITE' || 'READ_ONLY' }}
 
 # Cache policy:
 # - rust-cache keeps Cargo's registry/git inputs only; caching target/ produced
@@ -36,12 +37,15 @@ jobs:
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
     outputs:
-      tests: ${{ github.event_name == 'push' || steps.changes.outputs.tests == 'true' }}
+      tests: ${{ github.event_name != 'pull_request' || steps.changes.outputs.tests == 'true' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       # Default-branch pushes always run tests, including the first push and
       # rewritten root commits. Only PRs need a history-based path comparison.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -67,6 +71,9 @@ jobs:
               - 'packaging/**'
               - '.cargo/**'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/checks.yml'
+              - '.github/workflows/build.yml'
+              - '.github/actions/**'
               - 'rust-toolchain.toml'
               - 'rustfmt.toml'
               - '.rustfmt.toml'
@@ -78,7 +85,7 @@ jobs:
               - '.envrc'
               - 'flake.*'
               - '!**/*.md'
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
@@ -86,8 +93,11 @@ jobs:
   typos:
     name: typos
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: crate-ci/typos@8a48f81b6c64dcfea44b3633223084c4be58ac5f # v1.49.0
         with:
           config: .config/typos.toml
@@ -97,27 +107,35 @@ jobs:
   ast-grep:
     name: ast-grep
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: ast-grep/action@370e627637505696e4365db4a149af9f2311afe8 # v1.4
         with:
           version: 0.45.1
 
   publish-closure:
+    needs: fmt
+    if: ${{ !cancelled() && needs.fmt.outputs.tests == 'true' }}
     name: publish closure
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: "v0.16.0"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           shared-key: linux-stable-debug
           cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - run: cargo xtask release check-publish
 
   # The shell equivalent of `rustfmt` + `clippy`. The file set is every tracked
@@ -128,9 +146,12 @@ jobs:
   shell:
     name: shell
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         with:
           tool: shellcheck,shfmt
       - name: List tracked shell scripts
@@ -141,22 +162,27 @@ jobs:
         run: xargs shfmt -d < "${RUNNER_TEMP}/shell-scripts"
 
   clippy:
+    needs: fmt
+    if: ${{ !cancelled() && needs.fmt.outputs.tests == 'true' }}
     name: clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: clippy
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: "v0.16.0"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           shared-key: linux-stable-debug
           cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -174,8 +200,11 @@ jobs:
   # code (evdev/zbus vs the ObjC surface) and a single runner would miss a
   # too-new stabilization on the other side.
   msrv:
+    needs: fmt
+    if: ${{ !cancelled() && needs.fmt.outputs.tests == 'true' }}
     name: MSRV (cargo check, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     env:
       # `rust-toolchain.toml` pins the channel to `stable`, and rustup honours
       # that file over whatever toolchain this job installs — so for its whole
@@ -188,18 +217,20 @@ jobs:
       matrix:
         os: [macos-latest, ubuntu-latest]
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.98
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7 # 1.98
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: "v0.16.0"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           # Host OS splits Linux vs macOS; the rustc version is already in the key.
           shared-key: msrv-debug
           cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -215,22 +246,27 @@ jobs:
   # as clippy-windows). The declared floor stays on the `msrv` matrix.
 
   docs:
+    needs: fmt
+    if: ${{ !cancelled() && needs.fmt.outputs.tests == 'true' }}
     name: rustdoc (non-GUI crates)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: "v0.16.0"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           # Share debug deps with clippy/test-linux; RUSTDOCFLAGS is step-scoped
           # below so it does not fork the rust-cache env hash.
           shared-key: linux-stable-debug
           cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -261,18 +297,21 @@ jobs:
     if: ${{ !cancelled() && needs.fmt.outputs.tests == 'true' }}
     name: tests (linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: "v0.16.0"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           shared-key: linux-stable-debug
           cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -288,6 +327,7 @@ jobs:
     if: ${{ !cancelled() && needs.fmt.outputs.tests == 'true' }}
     name: tests (macos, ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -297,18 +337,20 @@ jobs:
           - arch: x86_64
             runner: macos-15-intel
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: "v0.16.0"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           # Host triple already splits arm64 vs x86_64 in the final cache key.
           shared-key: macos-stable-debug
           cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - name: Verify runner architecture
         run: test "$(uname -m)" = "${{ matrix.arch }}"
       - run: cargo test --workspace --all-targets
@@ -322,32 +364,40 @@ jobs:
     if: ${{ !cancelled() && needs.fmt.outputs.tests == 'true' }}
     name: tests (windows)
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: "v0.16.0"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           shared-key: windows-stable-debug
           cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - run: cargo test --workspace --exclude openhid-desktop
 
   cargo-deny:
+    needs: fmt
+    if: ${{ !cancelled() && needs.fmt.outputs.tests == 'true' }}
     name: cargo-deny
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       # cargo-deny calls `rustc -vV` through cargo metadata but does not compile.
       # This job deliberately skips the sccache setup used by compilation jobs.
       RUSTC_WRAPPER: ""
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       # Prebuilt binary install is faster than cargo-deny-action's bootstrap path
       # (~100s observed); advisory DB is still fetched by `cargo deny check`.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         with:
           tool: cargo-deny
       # Global flags before subcommand (matches cargo-deny-action defaults).
@@ -360,22 +410,27 @@ jobs:
       - run: cargo deny --config .cargo/deny.toml --all-features --manifest-path crates/openhid/Cargo.toml check
 
   clippy-windows:
+    needs: fmt
+    if: ${{ !cancelled() && needs.fmt.outputs.tests == 'true' }}
     name: clippy (windows)
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: clippy
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: "v0.16.0"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           shared-key: windows-stable-debug
           cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       # Whole workspace, matching the Linux jobs — GPUI's DirectX backend
       # covers the GUI on Windows. clippy subsumes `cargo check` and
       # additionally lints the Windows-only code paths (the WH_MOUSE_LL hook,
@@ -390,43 +445,53 @@ jobs:
   # clippy jobs compile. The pre-push hook runs the same command on a Mac, but
   # a hook can be skipped. Same cache key as `tests (macos)`.
   clippy-macos:
+    needs: fmt
+    if: ${{ !cancelled() && needs.fmt.outputs.tests == 'true' }}
     name: clippy (macos)
     runs-on: macos-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: clippy
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: "v0.16.0"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           shared-key: macos-stable-debug
           cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   wasm:
+    needs: fmt
+    if: ${{ !cancelled() && needs.fmt.outputs.tests == 'true' }}
     name: wasm (portable crates)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: wasm32-unknown-unknown
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: "v0.16.0"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           # Only Cargo inputs are cached, so the host's stable registry/git
           # cache is reusable even though rustc emits wasm objects via sccache.
           shared-key: linux-stable-debug
           cache-targets: false
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       # A portability gate, not a deliverable: nothing here is built for the
       # browser. `wasm32-unknown-unknown` has no OS under it, so a crate that
       # picks up a filesystem, a randomness source or a thread stops compiling

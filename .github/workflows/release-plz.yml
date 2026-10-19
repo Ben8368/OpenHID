@@ -5,6 +5,9 @@ on:
   push:
     branches: [master]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
@@ -17,8 +20,8 @@ env:
 jobs:
   release-pr:
     name: release-plz PR
-    # Publishing credentials belong to the upstream repository.
-    if: github.repository == 'AprilNEA/OpenLogi'
+    # Enable only after configuring this repository's publishing credentials.
+    if: vars.OPENHID_RELEASE_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -27,15 +30,15 @@ jobs:
       group: release-plz-pr-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: "v0.16.0"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           shared-key: linux-stable-debug
@@ -54,7 +57,7 @@ jobs:
           op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           op-github-app-item: ${{ secrets.OP_GITHUB_APP_ITEM }}
       - name: Run release-plz (release-pr)
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@8921286633dfa0c4020f7f30bd1c14fe19cbb10e # v0.5
         with:
           command: release-pr
         env:
@@ -63,7 +66,7 @@ jobs:
       # release-plz skips release=false app crates; git-cliff covers the whole repo.
       - name: Find current release PR
         id: open_release_pr
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -97,7 +100,7 @@ jobs:
         run: cargo build -p xtask
       - name: Check out release PR
         if: steps.open_release_pr.outputs.branch != ''
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ steps.open_release_pr.outputs.branch }}
           fetch-depth: 0
@@ -105,7 +108,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
       - name: Install git-cliff
         if: steps.open_release_pr.outputs.branch != ''
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         with:
           tool: git-cliff@2.13.1
           fallback: none
@@ -115,7 +118,7 @@ jobs:
         run: ../target/debug/xtask release changelog --config ../.config/cliff.toml
       - name: Commit root changelog
         if: steps.open_release_pr.outputs.branch != ''
-        uses: stefanzweifel/git-auto-commit-action@v7
+        uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7
         with:
           branch: ${{ steps.open_release_pr.outputs.branch }}
           commit_message: "chore(release): write whole-repo changelog"
@@ -127,7 +130,7 @@ jobs:
       # OpenHID's whole-repo changelog is the release PR body.
       - name: Replace release PR body with changelog
         if: steps.open_release_pr.outputs.number != ''
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           RELEASE_PR_NUMBER: ${{ steps.open_release_pr.outputs.number }}
         with:
@@ -161,7 +164,7 @@ jobs:
   release:
     name: release-plz release
     if: >-
-      github.repository == 'AprilNEA/OpenLogi' &&
+      vars.OPENHID_RELEASE_ENABLED == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
       startsWith(github.event.head_commit.message, 'chore: release'))
     runs-on: ubuntu-latest
@@ -169,17 +172,17 @@ jobs:
       contents: write
       pull-requests: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: "v0.16.0"
       # Restore Cargo inputs before compiling the xtask that selects the
       # version-bump commit. Compiler outputs come from sccache across commits.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           shared-key: linux-stable-debug
@@ -206,7 +209,7 @@ jobs:
           op-github-app-item: ${{ secrets.OP_GITHUB_APP_ITEM }}
       - name: Run release-plz (release)
         if: steps.release_commit.outputs.skip != 'true'
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@8921286633dfa0c4020f7f30bd1c14fe19cbb10e # v0.5
         with:
           command: release
         env:

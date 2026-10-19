@@ -58,6 +58,9 @@ concurrency:
   # would parse as a mapping.
   cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action == 'synchronize' || github.event.action == 'reopened' || github.event.action == 'closed' || (contains(fromJSON('["labeled","unlabeled"]'), github.event.action) && github.event.label.name == format('needs{0} build', ':'))) }}
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
@@ -130,9 +133,9 @@ jobs:
     env:
       OPENHID_BUNDLE_ASSETS: ${{ vars.OPENHID_BUNDLE_ASSETS }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
 
@@ -140,7 +143,7 @@ jobs:
         with:
           version: "v0.16.0"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           # Release profile (fat LTO) — never share with CI debug keys.
@@ -189,7 +192,7 @@ jobs:
           OPENHID_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.OP_R2_SECRET_ITEM }}/OPENHID_SPARKLE_PUBLIC_ED_KEY
 
       - name: Cache Homebrew downloads
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/Library/Caches/Homebrew
@@ -235,7 +238,7 @@ jobs:
 
       - name: Import Apple signing certificate
         if: ${{ inputs.sign }}
-        uses: apple-actions/import-codesign-certs@v7
+        uses: apple-actions/import-codesign-certs@77ba2a2a8f5cfc8c405ebf3159f767c323e238f9 # v7
         with:
           p12-file-base64: ${{ steps.load_secrets.outputs.APPLE_CERTIFICATE }}
           p12-password: ${{ steps.load_secrets.outputs.APPLE_CERTIFICATE_PASSWORD }}
@@ -379,7 +382,7 @@ jobs:
           ref_name="${ref_name//\//-}"
           cp target/release/OpenHID.dmg "dist/OpenHID-${ref_name}-macos-${{ matrix.arch }}.dmg"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: OpenHID-macos-dmg-${{ matrix.arch }}
           path: dist/*.dmg
@@ -429,9 +432,9 @@ jobs:
     # can't access a protected environment at all, then build fine).
     environment: ${{ inputs.sign && 'release' || '' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
 
@@ -441,7 +444,7 @@ jobs:
 
       # Both targets consume the same Cargo registry/git inputs. Compiler
       # outputs stay isolated by sccache's command and target-triple hashes.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           shared-key: windows-stable-release
@@ -550,7 +553,7 @@ jobs:
       # "Artifact Signing Certificate Profile Signer" role on the signing account.
       - name: Azure login (OIDC)
         if: ${{ inputs.sign }}
-        uses: azure/login@v3
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ steps.azure_config.outputs.AZURE_CLIENT_ID }}
           tenant-id: ${{ steps.azure_config.outputs.AZURE_TENANT_ID }}
@@ -574,7 +577,7 @@ jobs:
       # default AzureCliCredential picks up, so no azure-* secret inputs are needed.
       - name: Sign OpenHID Windows executables with Artifact Signing
         if: ${{ inputs.sign }}
-        uses: azure/artifact-signing-action@v2
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
         with:
           endpoint: ${{ steps.azure_config.outputs.AZURE_SIGNING_ENDPOINT }}
           signing-account-name: ${{ steps.azure_config.outputs.AZURE_SIGNING_ACCOUNT }}
@@ -649,7 +652,7 @@ jobs:
           $ref = $env:GITHUB_REF_NAME -replace '/', '-'
           Compress-Archive -Path stage\* -DestinationPath "dist\OpenHID-$ref-windows-${{ matrix.arch }}.zip"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: OpenHID-windows-${{ matrix.arch }}
           path: dist/*.zip
@@ -685,13 +688,13 @@ jobs:
     environment: ${{ inputs.sign && 'release' || '' }}
     steps:
       # Needed for packaging/windows/OpenHID.wxs.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # The portable zip from this arch's windows leg, containing the
       # already-signed OpenHID.exe, openhid-agent.exe, openhid-overlay.exe,
       # and openhid.exe. The MSI packages exactly the bytes the portable
       # artifact ships.
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: OpenHID-windows-${{ matrix.arch }}
           path: signed-zip
@@ -790,7 +793,7 @@ jobs:
 
       - name: Azure login (OIDC)
         if: ${{ inputs.sign }}
-        uses: azure/login@v3
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ steps.azure_config.outputs.AZURE_CLIENT_ID }}
           tenant-id: ${{ steps.azure_config.outputs.AZURE_TENANT_ID }}
@@ -807,7 +810,7 @@ jobs:
 
       - name: Sign OpenHID.msi with Artifact Signing
         if: ${{ inputs.sign }}
-        uses: azure/artifact-signing-action@v2
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
         with:
           endpoint: ${{ steps.azure_config.outputs.AZURE_SIGNING_ENDPOINT }}
           signing-account-name: ${{ steps.azure_config.outputs.AZURE_SIGNING_ACCOUNT }}
@@ -839,7 +842,7 @@ jobs:
           $ref = $env:GITHUB_REF_NAME -replace '/', '-'
           Copy-Item out\OpenHID.msi "dist\OpenHID-$ref-windows-${{ matrix.arch }}.msi"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: OpenHID-windows-msi-${{ matrix.arch }}
           path: dist/*.msi
@@ -868,15 +871,15 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: "v0.16.0"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           # Cargo does not include the host GLIBC in its freshness checks. Do
@@ -967,7 +970,7 @@ jobs:
             cp "$pkg" "dist/openhid-${ref_name}-linux-${PKG_ARCH}.pkg.tar.zst"
           done
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: OpenHID-linux-packages-${{ matrix.arch }}
           path: dist/*
@@ -998,7 +1001,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       # Native builds, like the packages above: the bundle is labelled with this
       # arch, so a mismatched runner would ship a wrongly-named file.
@@ -1085,7 +1088,7 @@ jobs:
             org.openhid.OpenHID stable
           ls -lh dist/
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: OpenHID-linux-flatpak-${{ matrix.arch }}
           path: dist/*

@@ -5,11 +5,11 @@
 # without write access is silently ignored by GitHub. Grant write access
 # before adding someone below.
 #
-# The last matching pattern wins. Shared ownership applies unless a later
-# rule requires AprilNEA's review.
+# The last matching pattern wins. All current paths belong to the maintainer;
+# explicit entries identify sensitive boundaries for future ownership changes.
 
 # ── Default ────────────────────────────────────────────────────────────────
-*                               @Ben8368 @davidbudnick
+*                               @Ben8368
 
 # ── Release, packaging, supply chain ───────────────────────────────────────
 # These paths control release credentials, packaging, dependencies, or build
@@ -39,7 +39,7 @@
 /crates/openhid-desktop/src/platform/updater.rs @Ben8368
 
 # ── Licensing and brand ────────────────────────────────────────────────────
-# design/ is proprietary; the license files define the dual-license boundary.
+# Replacement artwork is dual-licensed; license and provenance files own attribution.
 /LICENSE-MIT                    @Ben8368
 /LICENSE-APACHE                 @Ben8368
 /design/                        @Ben8368

@@ -13,6 +13,9 @@ on:
   # immutable release.
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
@@ -29,8 +32,8 @@ jobs:
   # installers UNSIGNED for testing; here we pass sign: true for the signed,
   # notarized artifacts the publish job ships.
   build:
-    # Upstream signing and publishing infrastructure is not configured for this fork.
-    if: github.repository == 'AprilNEA/OpenLogi'
+    # Signing and publishing require explicit opt-in and release-environment credentials.
+    if: vars.OPENHID_RELEASE_ENABLED == 'true'
     name: Build installers
     uses: ./.github/workflows/build.yml
     # Required so build.yml can read the 1Password / Azure / R2 signing secrets.
@@ -45,21 +48,21 @@ jobs:
     name: Generate release notes
     # Tag runs only: the generator diffs from the previous tag, and its only
     # consumer (publish) is tag-gated too.
-    if: ${{ github.ref_type == 'tag' }}
+    if: ${{ vars.OPENHID_RELEASE_ENABLED == 'true' && github.ref_type == 'tag' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
           cache: pnpm
@@ -100,7 +103,7 @@ jobs:
             --tag "$GITHUB_REF_NAME" \
             --output .release/RELEASE_NOTES.md
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: OpenHID-release-notes
           path: .release/RELEASE_NOTES.md
@@ -122,16 +125,16 @@ jobs:
     # by build.yml's `results` job — the reusable-workflow job result aggregates
     # all legs, so gating on it would let a failed Windows/Linux leg block the
     # macOS release. The Windows/Linux legs stay best-effort (pattern download).
-    if: ${{ github.ref_type == 'tag' && !cancelled() && needs.build.outputs.macos_result == 'success' && needs.release-notes.result == 'success' }}
+    if: ${{ vars.OPENHID_RELEASE_ENABLED == 'true' && github.ref_type == 'tag' && !cancelled() && needs.build.outputs.macos_result == 'success' && needs.release-notes.result == 'success' }}
     permissions:
       contents: write
     outputs:
       installer_published: ${{ steps.artifacts.outputs.installer }}
     steps:
       # Needed to build & run the xtask manifest generator below.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       # Match CI so Cargo inputs and sccache compiler objects are reusable.
       - name: Align compiler inputs with CI
@@ -141,7 +144,7 @@ jobs:
         with:
           version: "v0.16.0"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: v2-cargo
           shared-key: linux-stable-debug
@@ -149,7 +152,7 @@ jobs:
           # Tag publish is not a useful cache writer; restore Cargo inputs only.
           save-if: false
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: OpenHID-macos-dmg-*
           path: dist
@@ -161,18 +164,18 @@ jobs:
       # only after both exes are built, signed, and verified, so whatever
       # arrived is safe to ship. A pattern download that matches nothing
       # succeeds with an empty dist (unlike by-name, which fails).
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: OpenHID-windows-*
           path: dist
           merge-multiple: true
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: OpenHID-release-notes
           path: .release
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: OpenHID-linux-packages-*
           path: dist
@@ -181,7 +184,7 @@ jobs:
       # Best-effort alongside the packages, and separate from them: the Flatpak
       # leg builds the whole workspace again inside the SDK, so it is the
       # slowest Linux job and the one most likely to be the single leg missing.
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: OpenHID-linux-flatpak-*
           path: dist
@@ -406,7 +409,7 @@ jobs:
       # release" rejection. latest.json is intentionally not attached — it lives in
       # R2 only; RELEASE_NOTES.md is kept outside dist for the same reason.
       - name: Publish GitHub Release with assets
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           body_path: .release/RELEASE_NOTES.md
           files: |
@@ -426,12 +429,12 @@ jobs:
     name: Dispatch installer site update
     runs-on: ubuntu-latest
     needs: publish
-    if: ${{ needs.publish.outputs.installer_published == 'true' }}
+    if: ${{ vars.OPENHID_INSTALLER_SITE_ENABLED == 'true' && needs.publish.outputs.installer_published == 'true' }}
     permissions:
       contents: read
     steps:
       # Needed by the local token-minting action.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Mint installer-site token (GitHub App)
         id: installer_site_token
@@ -439,19 +442,20 @@ jobs:
         with:
           op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           op-github-app-item: ${{ secrets.OP_GITHUB_APP_ITEM }}
-          owner: openhid-org
-          repositories: get
+          owner: ${{ vars.OPENHID_INSTALLER_SITE_OWNER }}
+          repositories: ${{ vars.OPENHID_INSTALLER_SITE_REPO }}
 
       - name: Dispatch installer site update
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
           token: ${{ steps.installer_site_token.outputs.token }}
-          repository: openhid-org/get
+          repository: ${{ format('{0}/{1}', vars.OPENHID_INSTALLER_SITE_OWNER, vars.OPENHID_INSTALLER_SITE_REPO) }}
           event-type: publish-openhid-installer
           client-payload: |
             {"tag": "${{ github.ref_name }}"}
 
   homebrew-tap:
+    if: ${{ vars.OPENHID_HOMEBREW_ENABLED == 'true' }}
     name: Dispatch homebrew-tap update
     runs-on: ubuntu-latest
     needs: publish
@@ -460,7 +464,7 @@ jobs:
     steps:
       # The token-minting action below is a local action, so the repo must be
       # on disk before it can run.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Mint homebrew-tap token (GitHub App)
         id: tap_token
@@ -468,14 +472,14 @@ jobs:
         with:
           op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           op-github-app-item: ${{ secrets.OP_GITHUB_APP_ITEM }}
-          owner: AprilNEA
-          repositories: homebrew-tap
+          owner: ${{ vars.OPENHID_HOMEBREW_OWNER }}
+          repositories: ${{ vars.OPENHID_HOMEBREW_REPO }}
 
       - name: Dispatch homebrew-tap update
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
           token: ${{ steps.tap_token.outputs.token }}
-          repository: AprilNEA/homebrew-tap
+          repository: ${{ format('{0}/{1}', vars.OPENHID_HOMEBREW_OWNER, vars.OPENHID_HOMEBREW_REPO) }}
           event-type: update-openhid
           client-payload: |
             {"version": "${{ github.ref_name }}"}

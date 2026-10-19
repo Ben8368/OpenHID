@@ -279,6 +279,10 @@ full tier. Non-Rust changes use the applicable non-Rust checks.
 
 ## GitHub workflow
 
+[Review and commit attribution](REVIEW_POLICY.md) owns the traffic-light audit and
+commit trailers. [GitHub automation](GITHUB_AUTOMATION.md) describes validation,
+dependency bots, optional integrations, and repository activation.
+
 Read this section before preparing, adopting, reviewing, or merging a PR.
 These procedures do not authorize remote writes: obtain approval before pushing,
 opening or merging PRs, publishing, or approving/rerunning workflows.
@@ -290,13 +294,13 @@ opening or merging PRs, publishing, or approving/rerunning workflows.
 - Merging PRs: **squash by default** with a hand-written subject
   `type(scope): description (#N)` (release-plz parses it; merge commits are disabled).
   Rebase-merge only when every commit on the branch is already release-quality
-  conventional. Wait for the Greptile review check and CI before merging — findings get
+  conventional. Wait for required review and CI checks before merging — findings get
   fixed, replied to, and resolved, not ignored.
 - PR bodies: `## Summary`, `## Changes` (per-crate bullets), `## Testing` listing the
   exact commands run plus hardware-verification status (say "not runtime-tested on
   hardware" when true — real-hardware verification is the maintainer's job, so every
   fix PR states how to test it), and a closing `Fixes #N` line. Screenshots for UI
-  changes.
+  changes. Include the audit fields from the PR template and review policy.
 - Issues use the bug/feature/device forms and the `type:`/`area:`/`platform:`/`needs:`/
   `status:` label families. Deferred or out-of-scope work becomes a linked issue, not a
   TODO comment.

@@ -1,0 +1,105 @@
+name: Checks
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly full validation also refreshes the dependency-advisory checks.
+    - cron: "13 2 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workflows:
+    name: Workflow validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -r .github/scripts/governance/requirements.txt
+      - run: python .github/scripts/governance/check_config.py
+      - name: Validate workflow expressions and shell steps
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+        run: |
+          tools_dir=$(mktemp -d)
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          curl --fail --silent --show-error --location --retry 3 "$url/$archive" -o "$tools_dir/$archive"
+          curl --fail --silent --show-error --location --retry 3 "$url/actionlint_${ACTIONLINT_VERSION}_checksums.txt" -o "$tools_dir/checksums.txt"
+          (cd "$tools_dir" && grep " $archive\$" checksums.txt | sha256sum --check --strict && tar -xzf "$archive" actionlint)
+          "$tools_dir/actionlint" -color
+
+  governance:
+    name: Attribution and gate tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - run: python -m unittest discover -s .github/scripts/governance -p 'test_*.py' -v
+      - run: python .github/scripts/i18n/merge_crowdin_download.py --self-test
+
+  release-tools:
+    name: Release tooling dependencies
+    needs: workflows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          package_json_file: .github/scripts/release-notes/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: .github/scripts/release-notes/pnpm-lock.yaml
+      - name: Verify the release tooling lockfile and syntax
+        working-directory: .github/scripts/release-notes
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          node --check generate.ts
+          node generate.ts --help
+
+  rust:
+    name: Rust
+    needs: workflows
+    uses: ./.github/workflows/ci.yml
+
+  result:
+    name: CI result
+    if: ${{ always() }}
+    needs: [workflows, governance, release-tools, rust]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require all validation lanes
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 .github/scripts/governance/ci_result.py

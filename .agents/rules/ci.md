@@ -14,7 +14,9 @@ paths:
 
 # Reproduce CI locally
 
-`.github/workflows/ci.yml` is the source of truth for the PR test pipeline.
+`.github/workflows/checks.yml` orchestrates PR validation and the stable required
+`CI result` check. `.github/workflows/ci.yml` is its reusable Rust pipeline and
+the source of truth for the executable Rust jobs below.
 This file is the agent-facing map of every job in that workflow to a local
 command. Keep them in lockstep: changing a `run:` in `ci.yml` without updating
 this file and `cargo xtask ci` is a bug. Two xtask tests catch part of that
@@ -34,8 +36,9 @@ Do not claim a skipped job passed. Name it as not run in the PR Testing section.
 ## Local gate (hard stop before push — scale it to the affected graph)
 
 The local gate keeps predictable failures off a PR update; CI then sweeps the
-whole workspace on its other hosts. CI does not run for an ordinary branch push
-that has no open PR, so never use it as a substitute for the local tier.
+whole workspace on its other hosts. Checks runs on PRs, default-branch pushes,
+manual dispatch, and a weekly full validation. An ordinary branch push without a PR does not run it; never use CI
+as a substitute for the local tier.
 
 A **Rust-bearing diff** changes Rust source or an input that controls how the Rust
 workspace builds or is validated. A truly non-Rust diff does not need Rust commands
@@ -228,14 +231,21 @@ only on macOS CI (`cargo test -p openhid-desktop i18n`).
 
 ## Other PR workflows
 
+The orchestration, dependency/security bots, activation flags, and local Python
+checks are documented in [GitHub automation](../../docs/GITHUB_AUTOMATION.md).
+Checks calls the reusable Rust jobs above; their local commands are unchanged.
+The shared path decision now gates all expensive Rust jobs on PRs, with full
+validation on default-branch, scheduled, and manual runs.
+
 Not part of `ci.yml`, not in the default run:
 
 - **Nix CI** (path-filtered): evaluate + format, then `nix build` the package on
   x86_64-linux and aarch64-linux. Local: the `nix fmt` / `nix flake check`
   commands above; a full `nix build` matches the build job on Linux.
 - **devenv CI** (path-filtered): format `devenv.nix` and `devenv --no-tui shell -- true`.
-- **Build**: unsigned installers on every PR. Run the matching `cargo xtask`
-  package command only when the diff touches packaging.
+- **Build**: unsigned installers on PRs labeled `needs: build` and manual
+  dispatches. Run the matching `cargo xtask` package command only when the diff
+  touches packaging.
 - **Build / Linux Flatpak**: gated behind the `needs: build` label like the rest
   of that matrix, so a PR touching `packaging/linux/flatpak/**` gets no feedback
   until someone labels it. Reproduce locally with
