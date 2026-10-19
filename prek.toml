@@ -3,6 +3,8 @@
 #:schema https://www.schemastore.org/prek.json
 
 # Built-in hooks run natively in Rust — no repo clone, no Python venv, works offline.
+default_stages = ["pre-commit"]
+
 [[repos]]
 repo = "builtin"
 hooks = [
@@ -99,3 +101,12 @@ entry = "shfmt --write"
 language = "system"
 types = ["shell"]
 exclude = "^\\.envrc$"
+
+# Keep attribution in the existing hook manager; do not replace core.hooksPath.
+[[repos.hooks]]
+id = "commit-attribution"
+name = "explicit commit attribution"
+entry = "python .github/scripts/governance/commit_attribution.py"
+language = "system"
+stages = ["commit-msg"]
+always_run = true

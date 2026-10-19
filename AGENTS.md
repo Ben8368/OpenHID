@@ -174,8 +174,11 @@ loaded for any Rust or `Cargo.toml` edit.
   PR format, contributor authorship, merge policy, and current-head CI handling.
 - **All GitHub artifacts — PR titles/bodies, commits, issues, reviews, comments — are
   written in English.**
-- **Never add AI attribution** ("Generated with …", AI co-author trailers) to commits,
-  PRs, or issues — including when adopting contributors' work.
+- Follow [the review and attribution policy](docs/REVIEW_POLICY.md): report a
+  RED/YELLOW/GREEN audit with verification evidence, and append the actual tool
+  trailer to AI-assisted commits. Keep the human primary author and preserve
+  contributor credit. Install the commit-msg check through the existing prek hooks.
+  Do not add promotional generation text to PRs or issues.
 - Never post to external repos or reply publicly on the maintainer's behalf — draft the
   text for approval. Keep public drafts short, casual, and problem-focused.
 

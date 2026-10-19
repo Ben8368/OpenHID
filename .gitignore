@@ -78,3 +78,6 @@ node_modules/
 /.flatpak-builder/
 /build/
 /repo/
+
+# Python helper bytecode.
+__pycache__/
