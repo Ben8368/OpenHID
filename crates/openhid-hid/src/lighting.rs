@@ -37,12 +37,12 @@ impl LightingCancellation {
 /// finishes. Dropping this handle requests cancellation, without blocking or
 /// destroying the worker. Use [`Self::detach`] for background reapplication.
 #[must_use = "wait for lighting or explicitly detach it"]
-pub struct LightingJob {
+pub struct LightingJob<T = ()> {
     cancel: Option<Arc<AtomicBool>>,
-    result: oneshot::Receiver<Result<(), WriteError>>,
+    result: oneshot::Receiver<Result<T, WriteError>>,
 }
 
-impl LightingJob {
+impl<T: Send + 'static> LightingJob<T> {
     /// Start an owned transaction. `operation` runs under the route's lighting
     /// lock; acquire receiver access and resolve the current publication inside
     /// it, not in the requester. The future must observe cancellation and drain
@@ -50,7 +50,7 @@ impl LightingJob {
     pub fn spawn<F, Fut>(route: &DeviceRoute, operation: F) -> Result<Self, WriteError>
     where
         F: FnOnce(LightingCancellation) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<(), WriteError>>,
+        Fut: Future<Output = Result<T, WriteError>>,
     {
         let lock = LIGHTING_LOCKS
             .lock()
@@ -81,7 +81,7 @@ impl LightingJob {
                     }),
                 };
                 match &result {
-                    Ok(()) => debug!(%route, "lighting transaction completed"),
+                    Ok(_) => debug!(%route, "lighting transaction completed"),
                     Err(error) => warn!(%route, ?error, "lighting transaction failed"),
                 }
                 // A cancelled/detached requester may have dropped its receiver.
@@ -100,7 +100,7 @@ impl LightingJob {
     /// any in-flight native write and its recovery; a successor stays queued.
     /// For long-lived hosts such as the agent; standalone commands must use
     /// [`Self::finish`] so process exit cannot cut off recovery.
-    pub async fn wait(mut self) -> Result<(), WriteError> {
+    pub async fn wait(mut self) -> Result<T, WriteError> {
         tokio::time::timeout(WAIT_TIMEOUT, &mut self.result)
             .await
             .map_err(|_| timed_out())?
@@ -110,7 +110,7 @@ impl LightingJob {
     /// Wait through native write completion and cleanup before allowing a
     /// standalone command to exit. The transaction enforces its own deadline
     /// between writes, but a stuck native call cannot safely be cut short.
-    pub async fn finish(mut self) -> Result<(), WriteError> {
+    pub async fn finish(mut self) -> Result<T, WriteError> {
         (&mut self.result)
             .await
             .map_err(|_| WriteError::AgentUnavailable)?
@@ -123,7 +123,7 @@ impl LightingJob {
     }
 }
 
-impl Drop for LightingJob {
+impl<T> Drop for LightingJob<T> {
     fn drop(&mut self) {
         if let Some(cancel) = &self.cancel {
             cancel.store(true, Ordering::Release);

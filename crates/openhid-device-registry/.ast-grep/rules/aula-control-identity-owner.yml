@@ -1,0 +1,24 @@
+# Owner: openhid_device_registry::aula::matches_control selects the complete
+# wireless control tuple. Neighboring collections must never receive commands.
+id: aula-control-identity-owner
+language: rust
+severity: error
+message: Use openhid_device_registry::aula::matches_control; the F87 control identity belongs to the registry.
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/openhid-device-registry/src/aula.rs
+  - "**/tests.rs"
+  - "**/tests/**"
+  - "**/*_tests.rs"
+rule:
+  all:
+    - kind: integer_literal
+    - regex: '^(0x[fF][aA]09|64009)$'
+    - not:
+        inside:
+          kind: mod_item
+          stopBy: end
+          has:
+            field: name
+            regex: '^(tests|format_tests)$'

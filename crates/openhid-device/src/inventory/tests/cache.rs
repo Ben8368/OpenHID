@@ -214,6 +214,15 @@ impl crate::backend::HidBackend for SlowOpenBackend {
         ))
     }
 
+    async fn open_raw_session(
+        &self,
+        _node: &crate::backend::NodeInfo,
+    ) -> Result<Box<dyn crate::backend::RawSession>, crate::backend::BackendError> {
+        Err(crate::backend::BackendError::Backend(
+            "slow-open backend has no raw session".into(),
+        ))
+    }
+
     fn watch(&self) -> Result<crate::backend::HotplugStream, crate::backend::BackendError> {
         Ok(Box::new(futures_lite::stream::empty()))
     }

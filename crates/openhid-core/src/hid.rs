@@ -8,6 +8,7 @@
 //! I/O of its own) depends on this module directly instead of linking the
 //! HID stack.
 
+pub mod aula;
 pub mod backlight;
 pub mod dpi;
 pub mod easy_switch;

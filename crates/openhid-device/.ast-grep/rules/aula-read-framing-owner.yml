@@ -1,0 +1,14 @@
+# aula.rs owns shared framing validation for configuration and matrix reads.
+id: aula-read-framing-owner
+language: rust
+severity: error
+message: Use aula::validated_frame and read_reports for bounded reads; validate_ordered_frames owns canonical snapshots.
+files:
+  - crates/openhid-device/src/aula/**/*.rs
+ignores:
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: $REPORT.starts_with(&[0x13, $$$REST])
+    - pattern: checksum(&$FRAME) != $FRAME[19]
+    - pattern: usize::from($FRAME[3]) != $SEQUENCE

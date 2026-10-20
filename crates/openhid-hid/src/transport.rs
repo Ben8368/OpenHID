@@ -158,6 +158,7 @@ impl Drop for SwIdLease {
 static SW_ID_LOCK_FALLBACK_REPORTED: AtomicBool = AtomicBool::new(false);
 
 mod native;
+mod raw_session;
 pub(crate) use native::{native_backend, recording_backend};
 
 #[cfg(any(target_os = "windows", test))]

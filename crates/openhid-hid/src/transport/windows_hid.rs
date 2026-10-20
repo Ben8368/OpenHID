@@ -16,8 +16,8 @@ use windows_sys::Win32::{
     },
     Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE},
     Storage::FileSystem::{
-        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
-        WriteFile,
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, OPEN_EXISTING, WriteFile,
     },
 };
 
@@ -185,10 +185,32 @@ fn bool_result(ok: bool) -> Result<(), io::Error> {
     }
 }
 
-struct HidHandle(HANDLE);
+pub(super) struct HidHandle(HANDLE);
+
+// SAFETY: The uniquely owned handle supports overlapped I/O from any thread.
+// Access to each operation's buffer and OVERLAPPED is exclusive through &mut;
+// shared access only keeps the handle alive. Pending owns both until completion.
+unsafe impl Send for HidHandle {}
+// SAFETY: A shared HidHandle only exposes an OS handle; Windows synchronizes
+// concurrent operations, each of which owns a separate OVERLAPPED and buffer.
+unsafe impl Sync for HidHandle {}
 
 impl HidHandle {
     fn open(path: &[u16], desired_access: u32) -> Result<Self, io::Error> {
+        Self::open_with_flags(path, desired_access, FILE_ATTRIBUTE_NORMAL)
+    }
+
+    pub(super) fn open_overlapped(info: &DeviceInfo) -> Result<Self, io::Error> {
+        let path = NativeHidWriter::new(info)
+            .ok_or_else(|| io::Error::other("expected a Windows HID path"))?;
+        Self::open_with_flags(
+            &path.path,
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_FLAG_OVERLAPPED,
+        )
+    }
+
+    fn open_with_flags(path: &[u16], desired_access: u32, flags: u32) -> Result<Self, io::Error> {
         // SAFETY: `path` is a NUL-terminated UTF-16 string (the terminator is
         // pushed in `NativeHidWriter::new`); the other arguments are valid
         // share/disposition constants and null security/template pointers.
@@ -200,7 +222,7 @@ impl HidHandle {
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 null(),
                 OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
+                flags,
                 null_mut(),
             )
         };
@@ -211,11 +233,11 @@ impl HidHandle {
         }
     }
 
-    fn raw(&self) -> HANDLE {
+    pub(super) fn raw(&self) -> HANDLE {
         self.0
     }
 
-    fn caps(&self) -> Result<HIDP_CAPS, NativeWriteError> {
+    pub(super) fn caps(&self) -> Result<HIDP_CAPS, NativeWriteError> {
         let mut attributes = HIDD_ATTRIBUTES {
             Size: size_of::<HIDD_ATTRIBUTES>().try_into().unwrap_or(u32::MAX),
             VendorID: 0,

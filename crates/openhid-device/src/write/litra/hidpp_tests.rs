@@ -349,6 +349,15 @@ impl HidBackend for LitraBackend {
         Ok(Box::new(CapturingWriter(Arc::clone(&self.raw_reports))))
     }
 
+    async fn open_raw_session(
+        &self,
+        _node: &NodeInfo,
+    ) -> Result<Box<dyn crate::backend::RawSession>, BackendError> {
+        Err(BackendError::Backend(
+            "this backend has no raw input session".into(),
+        ))
+    }
+
     fn watch(&self) -> Result<HotplugStream, BackendError> {
         Ok(Box::new(futures_lite::stream::empty()))
     }

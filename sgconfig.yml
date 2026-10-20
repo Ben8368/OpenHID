@@ -6,6 +6,7 @@ ruleDirs:
   - crates/openhid-cli/.ast-grep/rules
   - crates/openhid-core/.ast-grep/rules
   - crates/openhid-desktop/.ast-grep/rules
+  - crates/openhid-device-registry/.ast-grep/rules
   - crates/openhid-device/.ast-grep/rules
   - crates/openhid-fixture/.ast-grep/rules
   - crates/openhid-hidpp/.ast-grep/rules
