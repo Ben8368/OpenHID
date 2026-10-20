@@ -1,0 +1,27 @@
+# Owner: openhid_core::device — device labels shared by desktop and overlay.
+id: core-device-label-owner
+language: rust
+severity: error
+message: Device label policy belongs to openhid_core::device; use DeviceKind::translation_key and prettify_codename.
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/openhid-core/src/device.rs
+rule:
+  any:
+    - all:
+        - kind: function_item
+        - has:
+            field: name
+            regex: '^prettify_codename$'
+    - all:
+        - kind: match_arm
+        - regex: '(DeviceKind|Self)::[A-Za-z]+\s*=>\s*"(device|camera)\.'
+    - all:
+        - kind: function_item
+        - has:
+            pattern: $RAW.chars().any(char::is_lowercase)
+            stopBy: end
+        - has:
+            pattern: $RAW.split_whitespace()
+            stopBy: end
