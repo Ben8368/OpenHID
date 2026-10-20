@@ -91,6 +91,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_low_discharging_battery_needs_attention() {
+        let battery = |percentage, level, status| BatteryInfo {
+            freshness: crate::device::BatteryFreshness::Current,
+            percentage,
+            level,
+            status,
+        };
+        let good = BatteryLevel::Good;
+        let discharging = BatteryStatus::Discharging;
+
+        assert!(battery_needs_attention(&battery(
+            Some(20),
+            good,
+            discharging
+        )));
+        assert!(battery_needs_attention(&battery(
+            Some(0),
+            good,
+            discharging
+        )));
+        assert!(!battery_needs_attention(&battery(
+            Some(21),
+            BatteryLevel::Low,
+            discharging
+        )));
+        // A percentage decides on its own; the level only stands in for one.
+        assert!(!battery_needs_attention(&battery(None, good, discharging)));
+        assert!(battery_needs_attention(&battery(
+            None,
+            BatteryLevel::Low,
+            discharging
+        )));
+        assert!(battery_needs_attention(&battery(
+            None,
+            BatteryLevel::Critical,
+            discharging
+        )));
+        assert!(!battery_needs_attention(&battery(
+            None,
+            BatteryLevel::Unknown,
+            discharging
+        )));
+        assert!(battery_needs_attention(&battery(
+            Some(10),
+            good,
+            BatteryStatus::Unknown
+        )));
+        assert!(battery_needs_attention(&battery(
+            Some(10),
+            good,
+            BatteryStatus::Error
+        )));
+        for powered in [
+            BatteryStatus::Charging,
+            BatteryStatus::ChargingSlow,
+            BatteryStatus::Full,
+        ] {
+            assert!(
+                !battery_needs_attention(&battery(Some(5), BatteryLevel::Critical, powered)),
+                "{powered:?} is already being charged"
+            );
+            assert!(!battery_needs_attention(&battery(
+                None,
+                BatteryLevel::Critical,
+                powered
+            )));
+        }
+    }
+
+    #[test]
     fn charging_zero_is_unknown_but_discharging_zero_is_empty() {
         for status in [BatteryStatus::Charging, BatteryStatus::ChargingSlow] {
             let reading = BatteryInfo {

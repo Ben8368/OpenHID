@@ -26,9 +26,9 @@ use openhid_hid::{
 use openhid_ipc::transport;
 use openhid_ipc::{
     ActionRingCommandError, ActionRingInvocation, Agent, AgentSnapshot, AgentStatus,
-    BacklightObservation, ClientKind, ConfigReloadError, Generation, Identity, MonitorEvent,
-    Observation, PROTOCOL_VERSION, PairingCommandError, PairingFailure, PairingUpdate,
-    RingObservation, SavedConfig,
+    BacklightObservation, ClientKind, ConfigReloadError, Generation, Identity, LockKeyObservation,
+    MonitorEvent, NoticeObservation, Observation, PROTOCOL_VERSION, PairingCommandError,
+    PairingFailure, PairingUpdate, RingObservation, SavedConfig,
 };
 use succession::Compat;
 
@@ -361,6 +361,14 @@ impl Agent for AgentServer {
         saved: SavedConfig,
     ) -> Result<(), ConfigReloadError> {
         self.reload(Some(saved)).await
+    }
+
+    async fn observe_notices(self, _: Context, since: Generation) -> NoticeObservation {
+        self.observable.notices().observe(since).await
+    }
+
+    async fn observe_lock_keys(self, _: Context, since: Generation) -> LockKeyObservation {
+        self.observable.lock_keys().observe(since).await
     }
 
     async fn next_pairing(self, _: Context) -> Option<PairingUpdate> {

@@ -15,7 +15,9 @@ use std::time::Duration;
 use openhid_core::app::ForegroundApp;
 use openhid_core::binding::{ActionRingIcon, ActionRingSlot};
 use openhid_core::config::{ConfigRevision, Lighting};
-use openhid_core::device::{ChangedOnLight, DeviceInventory, LightState, StandaloneDevice};
+use openhid_core::device::{
+    BatteryInfo, ChangedOnLight, DeviceInventory, DeviceKind, LightState, LockKey, StandaloneDevice,
+};
 use openhid_core::hid::{
     BacklightChange, BacklightState, DeviceRoute, Dpi, DpiInfo, EasySwitchHosts, FnLockState,
     LightCommand, PairingError, PasskeyMethod, ReceiverSelector, ReportRate, ReportRateInfo,
@@ -117,6 +119,8 @@ pub use succession::Identity;
 /// v38: `Agent::{read_aula_lighting, set_aula_lighting, read_aula_settings,
 ///      set_aula_settings}` appended for verified F87 PRO wireless lighting
 ///      and sleep settings, explicit persistence and preview.
+///      `Agent::{observe_notices, observe_lock_keys}`, notice payloads and
+///      lock-key observations appended from upstream; existing RPC indices stay.
 pub const PROTOCOL_VERSION: u32 = 38;
 
 /// Environment variable through which the agent hands a supervised helper the
@@ -520,6 +524,78 @@ pub struct BacklightObservation {
     pub visible: bool,
 }
 
+/// The transient lock-key indicator: the lock key a keyboard just turned on
+/// or off, or none once the indicator's time is up.
+///
+/// Its own cell, as [`BacklightObservation`] is. The agent owns how long the
+/// indicator shows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LockKeyObservation {
+    /// See [`Generation`]. Pass it back to the next [`Agent::observe_lock_keys`].
+    pub generation: Generation,
+    /// The change to show, or `None` for none — which is also how the
+    /// indicator ends.
+    pub shown: Option<LockKeyChange>,
+    /// Configured UI locale, or `None` to follow the overlay host's system
+    /// locale.
+    pub language: Option<String>,
+}
+
+/// A lock key that a keyboard reported turning on or off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LockKeyChange {
+    /// The key that changed.
+    pub key: LockKey,
+    /// Whether the key is now on.
+    pub engaged: bool,
+}
+
+/// What a notice tells the user.
+///
+/// Variants are append-only because this enum crosses bincode IPC.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NoticeKind {
+    /// A device's battery came to need attention
+    /// ([`BatteryInfo::needs_attention`]).
+    LowBattery {
+        /// What to call the device: the name the user gave it, else the name
+        /// it reports. `None` when it has neither, and the overlay names it
+        /// by its kind.
+        name: Option<String>,
+        /// The device's kind, for that fallback name.
+        kind: DeviceKind,
+        /// The reading that made the battery low.
+        battery: BatteryInfo,
+    },
+}
+
+/// One notice the overlay is showing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Notice {
+    /// Unique among the notices of one agent run, so a notice that is still
+    /// showing keeps its place while others come and go.
+    pub id: u64,
+    /// What the notice says.
+    pub kind: NoticeKind,
+}
+
+/// The notices the overlay should be showing, stamped with their generation.
+///
+/// Its own cell, as [`RingObservation`] is. The agent owns how long a notice
+/// shows: it posts the notice and removes it when its time is up, so an
+/// overlay that starts or reconnects shows only what is still current.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoticeObservation {
+    /// See [`Generation`]. Pass it back to the next [`Agent::observe_notices`].
+    pub generation: Generation,
+    /// The notices to show, oldest first. Empty when there are none, which
+    /// is also how the last one ends.
+    pub notices: Vec<Notice>,
+    /// Configured UI locale, or `None` to follow the overlay host's system
+    /// locale.
+    pub language: Option<String>,
+}
+
 /// Why an Actions Ring interaction command was rejected.
 ///
 /// Variants are append-only because this enum crosses bincode IPC.
@@ -768,6 +844,16 @@ pub trait Agent {
         change: openhid_core::hid::aula::AulaChange,
         mode: openhid_core::hid::aula::LightingMode,
     ) -> Result<openhid_core::hid::aula::AulaState, WriteError>;
+
+    /// Long-poll the notices the overlay should be showing. Answers as soon
+    /// as they differ from generation `since`, or with the unchanged notices
+    /// after [`OBSERVE_HOLD`]. Pass `0` to read the current notices at once.
+    async fn observe_notices(since: Generation) -> NoticeObservation;
+
+    /// Long-poll the lock-key indicator. Answers as soon as it differs from
+    /// generation `since`, or with the unchanged indicator after
+    /// [`OBSERVE_HOLD`]. Pass `0` to read the current indicator at once.
+    async fn observe_lock_keys(since: Generation) -> LockKeyObservation;
 }
 
 /// One native-tray request scoped to an agent run and publication.
