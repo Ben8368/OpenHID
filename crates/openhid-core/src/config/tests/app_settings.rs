@@ -172,3 +172,41 @@ fn tray_battery_preference_defaults_to_brand_and_survives_hiding() {
         assert!(config.app_settings.tray_show_battery);
     }
 }
+
+#[test]
+fn low_battery_notifications_stay_on_unless_turned_off() {
+    assert!(Config::default().app_settings.low_battery_notifications);
+
+    let predating: Config = toml::from_str(
+        r"
+            schema_version = 8
+            [app_settings]
+            auto_download_assets = false
+        ",
+    )
+    .expect("config predating the low-battery setting loads");
+    assert!(predating.app_settings.low_battery_notifications);
+
+    let mut cfg = Config::default();
+    cfg.app_settings.low_battery_notifications = false;
+    assert!(!write_and_read(&cfg).app_settings.low_battery_notifications);
+}
+
+#[test]
+fn lock_key_notifications_stay_on_unless_turned_off() {
+    assert!(Config::default().app_settings.lock_key_notifications);
+
+    let predating: Config = toml::from_str(
+        r"
+            schema_version = 8
+            [app_settings]
+            low_battery_notifications = false
+        ",
+    )
+    .expect("config predating the lock-key setting loads");
+    assert!(predating.app_settings.lock_key_notifications);
+
+    let mut cfg = Config::default();
+    cfg.app_settings.lock_key_notifications = false;
+    assert!(!write_and_read(&cfg).app_settings.lock_key_notifications);
+}

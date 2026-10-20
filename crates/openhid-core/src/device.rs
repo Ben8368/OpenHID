@@ -89,6 +89,28 @@ impl DeviceKind {
             _ => None,
         }
     }
+
+    /// Stable catalog key for the localized name of the kind, shared by every
+    /// binary that names a device by what it is.
+    #[must_use]
+    pub const fn translation_key(self) -> &'static str {
+        match self {
+            Self::Mouse => "device.mouse",
+            Self::Keyboard => "device.keyboard",
+            Self::Numpad => "device.numpad",
+            Self::Presenter => "device.presenter",
+            Self::Remote => "device.remote",
+            Self::Trackball => "device.trackball",
+            Self::Touchpad => "device.touchpad",
+            Self::Tablet => "device.tablet",
+            Self::Gamepad => "device.gamepad",
+            Self::Joystick => "device.joystick",
+            Self::Headset => "device.headset",
+            Self::Camera => "camera.camera",
+            Self::Unknown => "device.device",
+            Self::Light => "device.lighting",
+        }
+    }
 }
 
 /// What a device can be *configured* to do, derived from the HID++ feature
@@ -293,6 +315,62 @@ pub struct BatteryInfo {
     /// Whether the probe supplied this value or replayed last-good data.
     #[serde(default)]
     pub freshness: BatteryFreshness,
+}
+
+/// Tidy a device name reported over HID++ for display.
+///
+/// Logitech reports gaming names in ALL CAPS (e.g. `"G513 RGB MECHANICAL
+/// GAMING KEYBOARD"`). This title-cases each word so the name reads like the
+/// curated asset names (`"MX Master 3S"`), and keeps model numbers (tokens
+/// with a digit, e.g. `G513`) and short acronyms (`RGB`, `TKL`, `SE`) as they
+/// are. A name already in mixed case is returned unchanged.
+#[must_use]
+pub fn prettify_codename(raw: &str) -> String {
+    if raw.chars().any(char::is_lowercase) {
+        return raw.to_string();
+    }
+    raw.split_whitespace()
+        .map(|word| {
+            if word.len() <= 3 || word.bytes().any(|b| b.is_ascii_digit()) {
+                word.to_string()
+            } else {
+                let mut chars = word.chars();
+                chars.next().map_or_else(String::new, |first| {
+                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+                })
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A keyboard lock key whose state the on-screen indicator reports.
+///
+/// Variants are append-only because this enum crosses bincode IPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LockKey {
+    /// Num Lock.
+    NumLock,
+    /// Caps Lock.
+    CapsLock,
+    /// Scroll Lock.
+    ScrollLock,
+}
+
+impl LockKey {
+    /// Whether this platform shows the indicator for this key.
+    ///
+    /// Caps Lock shows everywhere. macOS gives Num Lock and Scroll Lock no
+    /// meaning, so they show only on the other platforms. Logi Options+ marks
+    /// both Windows-only; it ships for Windows and macOS only, and Linux treats
+    /// these keys as Windows does.
+    #[must_use]
+    pub const fn is_indicated_here(self) -> bool {
+        match self {
+            Self::CapsLock => true,
+            Self::NumLock | Self::ScrollLock => !cfg!(target_os = "macos"),
+        }
+    }
 }
 
 /// Identity of an enumerated receiver — no paired-device state (that lives
@@ -557,9 +635,20 @@ pub struct DeviceInventory {
 mod tests {
     use super::{
         BatteryInfo, BatteryLevel, BatteryStatus, Capabilities, DeviceInventory, DeviceKind,
-        DeviceModelInfo, DeviceTransports, LightValueRange, LightValueUnit, ModelTransport,
-        PairedDevice, ReceiverInfo,
+        DeviceModelInfo, DeviceTransports, LightValueRange, LightValueUnit, LockKey,
+        ModelTransport, PairedDevice, ReceiverInfo, prettify_codename,
     };
+
+    #[test]
+    fn prettify_codename_title_cases_shouted_names_only() {
+        assert_eq!(
+            prettify_codename("G513 RGB MECHANICAL GAMING KEYBOARD"),
+            "G513 RGB Mechanical Gaming Keyboard"
+        );
+        assert_eq!(prettify_codename("PRO X  SUPERLIGHT"), "PRO X Superlight");
+        assert_eq!(prettify_codename("MX Master 3S"), "MX Master 3S");
+        assert_eq!(prettify_codename(""), "");
+    }
 
     fn inventory(slot: u8, wpid: Option<u16>, battery_percentage: u8) -> DeviceInventory {
         DeviceInventory {
@@ -854,5 +943,17 @@ mod tests {
             "min = 2700\nmax = 6500\nstep = 0\nunit = 'kelvin'\n",
         );
         result.expect_err("a zero step must not survive deserialization");
+    }
+
+    #[test]
+    fn caps_lock_shows_everywhere_and_num_and_scroll_lock_not_on_macos() {
+        assert!(LockKey::CapsLock.is_indicated_here());
+        for key in [LockKey::NumLock, LockKey::ScrollLock] {
+            assert_eq!(
+                key.is_indicated_here(),
+                !cfg!(target_os = "macos"),
+                "{key:?}"
+            );
+        }
     }
 }

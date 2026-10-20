@@ -1,7 +1,8 @@
 use super::home::{connection_icon_path, ordered_device_indices};
 use super::{Capabilities, DetailTab, DeviceKind, DeviceRecord};
 use crate::services::assets::ResolvedAsset;
-use crate::ui::battery::{battery_charging_no_reading, battery_needs_attention};
+use crate::ui::battery::battery_charging_no_reading;
+use openhid_core::battery::battery_needs_attention;
 use openhid_core::device::{
     BatteryInfo, BatteryLevel, BatteryStatus, DeviceModelInfo, DeviceTransports, LightCapabilities,
     LightValueRange, LightValueUnit,

@@ -31,15 +31,17 @@ record, earlier HID++ origin, third-party dependencies, and artwork licensing.
 The inherited implementation supports Logitech mice, keyboards, and UVC
 cameras on macOS, Linux, and Windows. Features include supported-device button
 remapping, DPI, SmartShift, gestures, per-application profiles, battery status,
-and camera controls. Device support depends on the model and connection.
+and camera controls. It also shows low-battery notices and lock-key indicators
+for supported devices. Device support depends on the model and connection.
 
 The long-running agent owns HID and input access. The desktop application and
 Actions Ring overlay communicate with it over local IPC. Configuration is
 stored locally as TOML; no account is required.
 
-The OpenHID name does not mean universal HID compatibility. Other brands,
-including AULA F87 PRO, require protocol-specific work and are not added by
-this import.
+The OpenHID name does not mean universal HID compatibility. Other brands
+require protocol-specific support. AULA F87 PRO wireless lighting and sleep
+controls are now supported; see the [device notes](docs/devices/aula-f87-pro.md)
+for the verified connection, backup boundaries, and remaining limitations.
 
 ## Build from source
 

@@ -44,12 +44,14 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt as _;
 use interprocess::local_socket::traits::tokio::Listener as _;
+use openhid_agent_core::lock_keys::LockKeyIndicator;
+use openhid_agent_core::notices::NoticeBoard;
 use openhid_core::app::ForegroundApp;
 use openhid_core::binding::ActionRingSlot;
 use openhid_core::config::{Config, Lighting};
 use openhid_core::device::{
-    BatteryInfo, BatteryLevel, BatteryStatus, Capabilities, DeviceInventory, DeviceKind,
-    PairedDevice, StandaloneDevice,
+    BatteryInfo, BatteryLevel, BatteryStatus, Capabilities, DeviceInventory, DeviceKind, LockKey,
+    PairedDevice, StandaloneDevice, prettify_codename,
 };
 use openhid_core::single_instance::{self, InstanceError, Role};
 use openhid_fixture::{DeviceProfile, FixtureError, ProfileDeviceSettings, ProfileSetting};
@@ -62,8 +64,9 @@ use openhid_ipc::transport;
 use openhid_ipc::{
     ActionRingCommandError, ActionRingInvocation, Agent, AgentSnapshot, AgentStatus,
     BacklightObservation, ClientKind, ConfigReloadError, ForegroundApps, FoundDevice, Generation,
-    Identity, InventoryHealth, MonitorEvent, OBSERVE_HOLD, Observation, PROTOCOL_VERSION,
-    PairingCommandError, PairingFailure, PairingPhase, PairingUpdate, RingObservation, SavedConfig,
+    Identity, InventoryHealth, LockKeyChange, LockKeyObservation, MonitorEvent, NoticeKind,
+    NoticeObservation, OBSERVE_HOLD, Observation, PROTOCOL_VERSION, PairingCommandError,
+    PairingFailure, PairingPhase, PairingUpdate, RingObservation, SavedConfig,
 };
 use succession::Compat;
 use tarpc::context::Context;
@@ -459,6 +462,33 @@ impl State {
         }
     }
 
+    /// The low battery an overlay is shown when it first looks, so the
+    /// notice can be seen without waiting out the sawtooth. Demo time only:
+    /// a `--fixture` run stays as recorded.
+    fn demo_low_battery(&self) -> Option<NoticeKind> {
+        if !self.clock.is_demo() {
+            return None;
+        }
+        let mouse = self
+            .profile
+            .inventories
+            .iter()
+            .find(|inventory| inventory.receiver.unique_id.as_deref() == Some(RECEIVER_UID))?
+            .paired
+            .iter()
+            .find(|device| device.slot == MOUSE_SLOT)?;
+        Some(NoticeKind::LowBattery {
+            name: mouse.codename.as_deref().map(prettify_codename),
+            kind: mouse.kind,
+            battery: BatteryInfo {
+                freshness: openhid_core::device::BatteryFreshness::Current,
+                percentage: Some(15),
+                level: BatteryLevel::Low,
+                status: BatteryStatus::Discharging,
+            },
+        })
+    }
+
     /// The inventory as polled. Rebuilt per call so the online mouse's battery
     /// is re-derived from elapsed time: successive snapshots visibly differ and
     /// the GUI's poll → repaint loop can be watched working.
@@ -679,6 +709,10 @@ struct MockAgent {
     /// The last [`Observation`] handed out, so `observe` can stamp a new
     /// generation when the rendered state differs from it.
     served: Arc<Mutex<Observation>>,
+    /// The notices the overlay shows, posted and ended as the agent does.
+    notices: Arc<NoticeBoard>,
+    /// The lock-key indicator the overlay shows, ended as the agent ends it.
+    lock_keys: LockKeyIndicator,
 }
 
 impl MockAgent {
@@ -690,6 +724,8 @@ impl MockAgent {
         Self {
             state: Arc::new(Mutex::new(state)),
             served: Arc::new(Mutex::new(served)),
+            notices: Arc::new(NoticeBoard::default()),
+            lock_keys: LockKeyIndicator::default(),
         }
     }
 
@@ -1009,6 +1045,29 @@ impl Agent for MockAgent {
     ) -> Result<(), ConfigReloadError> {
         info!("reload_saved_config (no-op in the mock)");
         Ok(())
+    }
+    async fn observe_notices(self, _: Context, since: Generation) -> NoticeObservation {
+        if since == 0
+            && let Some(notice) = self.state.lock().await.demo_low_battery()
+        {
+            self.notices.post(notice, None);
+        }
+        self.notices.observe(since).await
+    }
+
+    async fn observe_lock_keys(self, _: Context, since: Generation) -> LockKeyObservation {
+        // A demo turns Caps Lock on for the overlay's first look, so the
+        // indicator can be seen without a keyboard.
+        if since == 0 && self.state.lock().await.clock.is_demo() {
+            self.lock_keys.show(
+                LockKeyChange {
+                    key: LockKey::CapsLock,
+                    engaged: true,
+                },
+                None,
+            );
+        }
+        self.lock_keys.observe(since).await
     }
 
     async fn request_accessibility_prompt(self, _: Context) {

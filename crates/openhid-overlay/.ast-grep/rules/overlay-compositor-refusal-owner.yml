@@ -1,0 +1,14 @@
+# Owner: overlay::platform — compositor refusal and opening alternatives.
+id: overlay-compositor-refusal-owner
+language: rust
+severity: error
+message: Compositor refusal policy belongs to overlay::platform; use open_first and layer_shell_refused instead of classifying the raw error elsewhere.
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/openhid-overlay/src/platform.rs
+rule:
+  any:
+    - kind: type_identifier
+    - kind: identifier
+  regex: '^LayerShellNotSupportedError$'

@@ -38,7 +38,7 @@ use openhid_core::config::{ConfigRevision, Lighting, ScrollResolution};
 use openhid_core::device::{
     BatteryInfo, BatteryLevel, BatteryStatus, Capabilities, ChangedOnLight, DeviceInventory,
     DeviceKind, DeviceModelInfo, DeviceTransports, LightCapabilities, LightState, LightValueRange,
-    LightValueUnit, PairedDevice, RawDeviceAddress, ReceiverInfo, StandaloneDevice,
+    LightValueUnit, LockKey, PairedDevice, RawDeviceAddress, ReceiverInfo, StandaloneDevice,
 };
 use openhid_core::hid::{
     BacklightChange, BacklightControls, BacklightMode, BacklightState, BacklightStatus, Click,
@@ -51,9 +51,10 @@ use openhid_core::hid::{
 use openhid_ipc::{
     ActionRingCommandError, ActionRingInvocation, ActionRingPresentation, AgentRequest,
     AgentSnapshot, AgentStatus, BacklightObservation, ChosenLight, ClientKind, ConfigReloadError,
-    ForegroundApps, FoundDevice, Identity, InventoryHealth, MonitorEvent, Observation,
-    ObservedLight, PROTOCOL_VERSION, PairingCommandError, PairingFailure, PairingPhase,
-    PairingUpdate, RingObservation, SavedConfig,
+    ForegroundApps, FoundDevice, Identity, InventoryHealth, LockKeyChange, LockKeyObservation,
+    MonitorEvent, Notice, NoticeKind, NoticeObservation, Observation, ObservedLight,
+    PROTOCOL_VERSION, PairingCommandError, PairingFailure, PairingPhase, PairingUpdate,
+    RingObservation, SavedConfig,
 };
 use succession::{Compat, Run};
 
@@ -342,6 +343,70 @@ fn reload_saved_config() {
 #[test]
 fn observe_backlight() {
     assert_wire(&AgentRequest::ObserveBacklight { since: 7 }, "2507");
+}
+
+/// The overlay long-polls the notices by generation; a low-battery notice
+/// carries the device's name and kind and the reading that made it low.
+#[test]
+fn notices() {
+    assert_wire(&AgentRequest::ObserveNotices { since: 5 }, "2b05");
+    assert_wire(
+        &NoticeObservation {
+            generation: 3,
+            notices: vec![Notice {
+                id: 2,
+                kind: NoticeKind::LowBattery {
+                    name: Some("MX".into()),
+                    kind: DeviceKind::Mouse,
+                    battery: BatteryInfo {
+                        freshness: openhid_core::device::BatteryFreshness::Current,
+                        percentage: Some(15),
+                        level: BatteryLevel::Low,
+                        status: BatteryStatus::Discharging,
+                    },
+                },
+            }],
+            language: Some("de".into()),
+        },
+        "0301020001024d5800010f01000001026465",
+    );
+    assert_wire(
+        &NoticeObservation {
+            generation: 1,
+            notices: Vec::new(),
+            language: None,
+        },
+        "010000",
+    );
+}
+
+/// The overlay long-polls the lock-key indicator by generation; it carries
+/// the key that changed, whether it is now on, and the configured locale.
+#[test]
+fn lock_keys() {
+    assert_wire(&AgentRequest::ObserveLockKeys { since: 4 }, "2c04");
+    assert_wire(
+        &LockKeyObservation {
+            generation: 2,
+            shown: Some(LockKeyChange {
+                key: LockKey::CapsLock,
+                engaged: true,
+            }),
+            language: Some("de".into()),
+        },
+        "0201010101026465",
+    );
+    assert_wire(
+        &LockKeyObservation {
+            generation: 3,
+            shown: Some(LockKeyChange {
+                key: LockKey::ScrollLock,
+                engaged: false,
+            }),
+            language: None,
+        },
+        "0301020000",
+    );
 }
 
 /// A chord crosses the wire as its modifier bits and the key's HID usage.

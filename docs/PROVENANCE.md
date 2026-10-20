@@ -4,6 +4,8 @@ OpenHID is derived from [AprilNEA/OpenLogi](https://github.com/AprilNEA/OpenLogi
 and maintained independently by [Ben8368](https://github.com/Ben8368) and
 OpenHID contributors. This repository owns its development direction, issue
 tracking, and future releases. Upstream changes are not automatically synced.
+Later reviewed ports and the last reviewed upstream commit are recorded in
+[Following OpenLogi upstream](UPSTREAM_SYNC.md).
 
 The recorded upstream base is
 [`abc815acf9ebb4df06ccc574016bad2c9b4152ee`](https://github.com/AprilNEA/OpenLogi/commit/abc815acf9ebb4df06ccc574016bad2c9b4152ee)
