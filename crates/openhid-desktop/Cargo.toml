@@ -71,7 +71,7 @@ objc2-foundation = { workspace = true, features = ["NSProcessInfo", "NSString", 
 objc2-service-management = { workspace = true, features = ["std", "SMAppService", "SMErrors", "objc2", "objc2-foundation"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winreg = "0.55"
+winreg = "0.56"
 
 [lints]
 workspace = true
