@@ -767,9 +767,11 @@ physical effects.
 
 ## Incremental delivery
 
-Each phase is independently useful and should land with its own tests.
+Each phase is independently useful and lands with its own tests. Status below
+reflects the tree described at the top of this document and in
+[fixtures/README.md](../fixtures/README.md).
 
-### Phase 1: replay foundation
+### Phase 1: replay foundation — done
 
 - Define schema v1 and corpus validator.
 - Generalize the existing scripted raw channel into strict cassette replay.
@@ -781,7 +783,7 @@ Each phase is independently useful and should land with its own tests.
 Success criterion: Linux CI exercises direct and receiver device code with no
 hardware, and an altered request fails with a useful unmatched-report message.
 
-### Phase 2: semantic profiles and IPC mock
+### Phase 2: semantic profiles and IPC mock — done
 
 - Extract the hard-coded mock inventory into the profile/state model.
 - Keep it as the built-in default.
@@ -793,7 +795,7 @@ hardware, and an altered request fails with a useful unmatched-report message.
 Success criterion: one profile drives both mock-agent behavior and desktop
 state tests without duplicating the inventory in Rust.
 
-### Phase 3: read-only recorder
+### Phase 3: read-only recorder — done
 
 - Add observed-channel recording and raw-writer capture.
 - Add strict, unambiguous target selection.
@@ -806,7 +808,7 @@ state tests without duplicating the inventory in Rust.
 Success criterion: a fresh clone can replay a fixture captured on another host,
 obtain the reviewed semantic output, and pass privacy validation.
 
-### Phase 4: lifecycle and fault scenarios
+### Phase 4: lifecycle and fault scenarios — not started
 
 - Add explicit event/barrier controls.
 - Cover channel failure/repair, sleeping slots, malformed reports, late
@@ -817,7 +819,7 @@ obtain the reviewed semantic output, and pass privacy validation.
 Success criterion: tests reproduce recovery sequences without real sleeps and
 assert channel/cache effects as well as final inventory.
 
-### Phase 5: full agent-core replay
+### Phase 5: full agent-core replay — not started
 
 - Introduce the coherent hardware runtime dependency.
 - Route inventory, pool, pairing, standalone devices, lights, gate, and cache
@@ -828,7 +830,7 @@ Success criterion: the real orchestration publishes and mutates a replayed
 device without any native backend call. This phase must not replace the faster
 IPC mock or device-level suites.
 
-### Phase 6: explicit write capture and hardware comparison
+### Phase 6: explicit write capture and hardware comparison — not started
 
 - Add individually reviewed, restorable write plans.
 - Add opt-in hardware comparison reports.
@@ -838,21 +840,20 @@ IPC mock or device-level suites.
 Success criterion: every supported write case states whether it was byte-tested,
 semantic-readback-tested, and runtime-tested on physical hardware.
 
-## First vertical slice
+## First vertical slice — done
 
-The smallest implementation that validates the architecture is:
+The smallest implementation that validated the architecture was:
 
 1. schema and validator for one profile plus named cassettes;
 2. strict replay of a direct mouse channel and a Bolt receiver channel;
 3. production `get_dpi_info` and inventory probe assertions;
 4. the current mock mouse represented as a profile and loaded by
    `openhid-agent-mock`;
-5. no recording, writes, pairing, serialized scenario language, or full-agent
-   dependency injection yet.
+5. recording and corpus verification followed in Phase 3; full write capture,
+   pairing scenarios, and agent-core injection remain later phases.
 
-This proves that one semantic profile can serve UI development while raw
-cassettes independently protect device parsing. Only then is native recording
-worth adding.
+That slice proved one semantic profile can serve UI development while raw
+cassettes independently protect device parsing. Phases 4–6 extend it.
 
 ## Rejected shortcuts
 

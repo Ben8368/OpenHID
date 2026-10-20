@@ -18,6 +18,13 @@
 
 ## Install a release package
 
+This script downloads assets named `openhid-<tag>-linux-<arch>.<ext>`. If a
+GitHub Release only attaches inherited `openlogi-…` filenames, it is not an
+OpenHID package set — use
+[`--from-source`](#install-from-source-with-the-script) or
+[build from source](../README.md#build-from-source) instead. Prefer source
+builds until a matching OpenHID-branded asset set is attached.
+
 Download the installer to a file over HTTPS, inspect it, and then run it. Do
 not use `curl | sh`:
 

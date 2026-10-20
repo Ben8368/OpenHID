@@ -6,6 +6,12 @@ The `openhid` command-line tool. For install and configuration, see the
 ```sh
 openhid list                 # paired devices: slot, codename, kind, online, battery
 openhid assets sync          # pre-fetch device renders from the fastest available mirror
+openhid backlight             # read or persistently set keyboard backlight (HID++ 0x1982)
+openhid camera               # read or write Logitech UVC image controls
+openhid snapshot             # capture one webcam frame to a PNG (default: snapshot.png)
+openhid light list           # list standalone lights (Litra) and their controls
+openhid fixture contribute   # privacy-safe fixture wizard (see fixtures/README.md)
+openhid fixture verify DIR   # strictly verify one on-disk fixture directory
 openhid diag aula            # read and validate F87 PRO 2.4 GHz configuration (experimental)
 openhid diag aula --brightness 2 --preview # verify lighting and restore the full original snapshot
 openhid diag aula --effect 12 --brightness 3 --save # explicitly SAVE and read back
@@ -16,10 +22,12 @@ openhid diag aula --backup f87-config.json # configuration block; excludes keyma
 openhid diag aula --restore f87-config.json --save # restore validated configuration and verify
 openhid diag features        # dump every HID++ feature the active device reports
 openhid diag controls        # dump reprogrammable controls and capability flags
+openhid diag battery          # read the raw battery report (0x1004 / 0x1000 / 0x1F20)
 openhid diag dpi             # read → write → read-back → restore DPI (smoke test)
 openhid diag pointer-speed             # test 0x2205 pointer scaling and attempt to restore it
 openhid diag smartshift                # toggle SmartShift and restore (smoke test)
 openhid diag smartshift --torque 60    # set scrolling force / feedback intensity (1-100%)
+openhid diag wheel                     # read or set HID++ 0x2121 wheel reporting resolution
 openhid diag lighting ff0000           # solid colour for a wired RGB keyboard (any RRGGBB hex)
 ```
 

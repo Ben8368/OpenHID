@@ -47,7 +47,7 @@ optional physical device key.
 `[app_settings]` contains application-wide preferences:
 
 - startup, update, menu-bar / tray, input-capture, and asset-download toggles
-- `asset_source`: `automatic`, `openhid`, `cloudflare`, or `fastly`
+- `asset_source`: `automatic`, `openlogi`, `cloudflare`, or `fastly`
 - `language`, `appearance`, `device_view_mode` (`grid`, `list`, or `carousel`),
   optional theme names, and optional UI radius
 - `smooth_scroll` toggles finite animation for traditional mouse-wheel input. With it

@@ -72,11 +72,18 @@ settings and OS permissions are not imported automatically.
 
 ## Distribution status
 
-This import does not publish an OpenHID installer or enable an update service.
-Build from source until releases are published in this repository. Upstream
-OpenLogi installers, Homebrew packages, update feeds, signing identities, and
+Prefer [building from source](#build-from-source). This repository tags GitHub
+Releases; OpenHID-branded Linux packages use `openhid-…` asset names and are
+installed with the verified script in
+[docs/INSTALL-linux.md](docs/INSTALL-linux.md) (`--from-source` installs a local
+`target/release` build when a matching package set is not attached). A release
+that only carries inherited `openlogi-…` filenames is not an OpenHID package
+set — build from source instead.
+
+The built-in updater has no default OpenHID manifest URL. Upstream OpenLogi
+installers, Homebrew packages, update feeds, signing identities, and
 translation services are not OpenHID distributions. Workspace crates are not
-published to crates.io by this import.
+published to crates.io.
 
 The OpenHID logo and application icons are original replacement artwork;
 upstream proprietary brand assets are not used. Device-image services remain

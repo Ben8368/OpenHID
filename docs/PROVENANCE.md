@@ -49,13 +49,14 @@ Do not run two agents controlling the same physical device simultaneously.
 
 ## Project services
 
-No OpenHID release channel or signing credentials are configured in this
-import. The built-in updater has no default manifest URL. A future release
-must explicitly set `OPENHID_UPDATE_MANIFEST_URL` and its own
+GitHub Release tags may exist in this repository. OpenHID-branded installer
+assets use `openhid-…` names (see [INSTALL-linux.md](INSTALL-linux.md)); a tag
+that only carries inherited `openlogi-…` filenames is not an OpenHID package
+set. The built-in updater has no default OpenHID manifest URL — a release that
+enables in-app updates must set `OPENHID_UPDATE_MANIFEST_URL` and its own
 `OPENHID_UPDATE_MINISIGN_PUBLIC_KEY` (and its own Sparkle feed/key on macOS).
-Inherited signed-release, release-plz and Crowdin workflows remain gated to
-the original repository until replaced with an OpenHID release process.
-Every workspace crate is marked `publish = false` for this initial import.
+Inherited Crowdin and upstream-only release workflows are not OpenHID
+distribution channels. Every workspace crate is marked `publish = false`.
 
 Device-image mirrors remain third-party sources and keep their original URLs.
 They are separate from the removed upstream brand artwork and update feeds.

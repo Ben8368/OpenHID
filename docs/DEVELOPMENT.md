@@ -1,7 +1,8 @@
 > OpenHID is an independent source import. See [source provenance](PROVENANCE.md).
 > The release/signing/Crowdin recipes below describe inherited tooling; these
-> services require OpenHID-owned configuration before use. No release feed is
-> enabled by default. Build from source using the current README.
+> services require OpenHID-owned configuration before use. The in-app updater
+> has no default OpenHID manifest URL. Prefer building from source; Linux
+> packaging is in [INSTALL-linux.md](INSTALL-linux.md).
 
 # Developing OpenHID
 
@@ -184,22 +185,32 @@ ignored by release builds.
 
 ## Project layout
 
+Crate roles match the architecture table in [`AGENTS.md`](../AGENTS.md). Short map:
+
 ```
 crates/
-  openhid/         the `openhid` binary — a thin wrapper over openhid-cli
-  openhid-core/    types, config (TOML), paths, button + action catalog — no HID, no async
-  openhid-inject/  OS input synthesis: CGEvent, uinput/MPRIS, and SendInput
-  openhid-hidpp/   vendored HID++ protocol crate (lib name `hidpp`)
-  openhid-hid/     device discovery, HID++ reads/writes, and control capture over async-hid
-  openhid-assets/  device-render registry schema + cached HTTP fetch from OpenHID asset mirrors
-  openhid-cli/     CLI implementation: command tree + `run()`, called by the `openhid` binary
-  openhid-agent-core/  shared orchestration + the agent/GUI IPC contract
-  openhid-agent/   the `openhid-agent` binary — background agent owning device I/O and the hook
-  openhid-hook/    OS mouse hook: macOS CGEventTap, Linux evdev/uinput, Windows WH_MOUSE_LL
-  openhid-ui/      presentation shared by the two GPUI processes: ring geometry/icons,
-                    the GPUI asset source, locale negotiation — gpui, no gpui-component
-  openhid-desktop/     the `openhid-desktop` binary — GPUI + gpui-component IPC client
-  openhid-overlay/ the `openhid-overlay` binary — the cursor-centred Actions Ring
+  openhid/                CLI binary — thin wrapper over openhid-cli
+  openhid-core/           pure types, TOML config, action catalog, locale negotiation
+                          (feature-gated host plumbing: fs, locale, worker, logging)
+  openhid-device-registry/ receiver protocols and standalone-device driver metadata
+  openhid-hidpp/          hard fork of the hidpp protocol crate (lib name `hidpp`)
+  openhid-hidpp-derive/   private derive macro for openhid-hidpp feature boilerplate
+  openhid-fixture/        host-free fixture schemas, identity policy, privacy checks
+  openhid-device/         HID++ layer against HidBackend — no host I/O
+  openhid-hid/            that layer on this host: async-hid, permissions, probe cache
+  openhid-camera/         Logitech UVC enumeration, capture, controls, Camera permission
+  openhid-assets/         device-render registry + cached fetch from asset mirrors
+  openhid-cli/            CLI dispatch: agent inventory when available, plus diagnostics
+  openhid-hook/           OS input capture: CGEventTap / evdev+uinput / WH_MOUSE_LL
+  openhid-inject/         OS input synthesis: CGEvent / uinput+MPRIS / SendInput
+  openhid-agent-core/     shared agent orchestration (hook, HID++ writes, DPI, Actions Ring)
+  openhid-ipc/            tarpc/bincode IPC contract + local-socket transport
+  openhid-agent/          openhid-agent binary — runtime HID/input server
+  openhid-permissions/    privacy-permission status + Settings deep links (reads only)
+  openhid-ui/             shared GPUI presentation — gpui, not gpui-component
+  openhid-desktop/        GPUI + gpui-component settings app — pure IPC client
+  openhid-overlay/        cursor-centred Actions Ring — pure IPC client
+xtask/                    cargo xtask: bundling, packaging, release manifest
 ```
 
 ## Agent guidance

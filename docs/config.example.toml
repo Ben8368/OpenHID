@@ -13,6 +13,7 @@ mouse_profile_target = "pointer"
 smooth_scroll = false
 vertical_scroll_sensitivity = 14
 auto_download_assets = true
+# automatic | openlogi | cloudflare | fastly
 asset_source = "automatic"
 language = "en"
 thumbwheel_sensitivity = 14
