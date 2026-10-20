@@ -109,7 +109,7 @@ fn representative_smartshift_status() -> SmartShiftStatus {
 /// unreleased version and leave this pin alone (`crates/openhid-ipc/AGENTS.md`).
 #[test]
 fn protocol_version_is_pinned() {
-    assert_eq!(PROTOCOL_VERSION, 37);
+    assert_eq!(PROTOCOL_VERSION, 38);
 }
 
 #[test]
@@ -993,4 +993,133 @@ fn battery_freshness_and_tray_selection() {
         &AgentRequest::AcknowledgeDeviceSelection { request },
         "2607122a0d756e69743a3031303230333034",
     );
+}
+
+#[test]
+fn aula_lighting_wire_contract() {
+    use openhid_core::hid::aula::{LightingChange, LightingMode, LightingState};
+    let state = LightingState {
+        effect: 12,
+        brightness: Some(3),
+        speed: Some(4),
+    };
+    assert_wire(&state, "0c01030104");
+    // Unknown/custom effect IDs remain readable without implying write support.
+    assert_wire(
+        &LightingState {
+            effect: 21,
+            brightness: None,
+            speed: None,
+        },
+        "150000",
+    );
+    let change = LightingChange::new(Some(12), Some(2), None).unwrap();
+    assert_wire(&change, "010c010200");
+    assert_wire(&LightingMode::Apply, "00");
+    assert_wire(&LightingMode::Save, "01");
+    assert_wire(&LightingMode::Preview, "02");
+    let route = DeviceRoute::Direct {
+        vendor_id: 1,
+        product_id: 2,
+    };
+    assert_wire(
+        &AgentRequest::ReadAulaLighting {
+            route: route.clone(),
+        },
+        "27020102",
+    );
+    assert_wire(
+        &AgentRequest::SetAulaLighting {
+            route,
+            change,
+            mode: LightingMode::Save,
+        },
+        "28020102010c01020001",
+    );
+    assert_wire(
+        &openhid_ipc::AgentResponse::ReadAulaLighting(Ok(state)),
+        "27000c01030104",
+    );
+    assert_wire(
+        &openhid_ipc::AgentResponse::SetAulaLighting(Ok(state)),
+        "28000c01030104",
+    );
+}
+
+#[test]
+fn aula_invalid_wire_edits_are_refused_before_dispatch() {
+    use openhid_core::hid::aula::LightingChange;
+    for bytes in [
+        vec![0, 0, 0],
+        vec![1, 19, 0, 0],
+        vec![0, 1, 5, 0],
+        vec![0, 0, 1, 5],
+        vec![1, 0, 1, 1, 0],
+    ] {
+        bincode::DefaultOptions::new()
+            .deserialize::<LightingChange>(&bytes)
+            .unwrap_err();
+    }
+}
+
+#[test]
+fn aula_settings_wire_contract() {
+    use openhid_core::hid::aula::{
+        AulaChange, AulaState, LightingMode, LightingState, SleepTimeout,
+    };
+    let timeout = SleepTimeout::from_seconds(600).unwrap();
+    assert_wire(&timeout, "fb5802");
+    let state = AulaState::new(
+        LightingState {
+            effect: 12,
+            brightness: Some(3),
+            speed: Some(4),
+        },
+        Some(timeout),
+    );
+    assert_wire(&state, "0c0103010401fb5802");
+    let change = AulaChange::new(None, Some(timeout)).unwrap();
+    assert_wire(&change, "0001fb5802");
+    let route = DeviceRoute::Direct {
+        vendor_id: 1,
+        product_id: 2,
+    };
+    assert_wire(
+        &AgentRequest::ReadAulaSettings {
+            route: route.clone(),
+        },
+        "29020102",
+    );
+    assert_wire(
+        &AgentRequest::SetAulaSettings {
+            route,
+            change,
+            mode: LightingMode::Save,
+        },
+        "2a0201020001fb580201",
+    );
+    assert_wire(
+        &openhid_ipc::AgentResponse::ReadAulaSettings(Ok(state)),
+        "29000c0103010401fb5802",
+    );
+    assert_wire(
+        &openhid_ipc::AgentResponse::SetAulaSettings(Ok(state)),
+        "2a000c0103010401fb5802",
+    );
+}
+
+#[test]
+fn aula_invalid_settings_wire_edits_are_refused_before_dispatch() {
+    use openhid_core::hid::aula::{AulaChange, SleepTimeout};
+    for bytes in [vec![0, 0], vec![0, 1, 61], vec![0, 1, 0xfb, 0x2d, 0x01]] {
+        bincode::DefaultOptions::new()
+            .deserialize::<AulaChange>(&bytes)
+            .unwrap_err();
+    }
+    for seconds in [0u16, 61, 301, 1201, u16::MAX] {
+        let encoded = bincode::DefaultOptions::new().serialize(&seconds).unwrap();
+        bincode::DefaultOptions::new()
+            .deserialize::<SleepTimeout>(&encoded)
+            .unwrap_err();
+    }
 }
