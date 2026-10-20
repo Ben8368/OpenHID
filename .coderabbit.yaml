@@ -1,0 +1,202 @@
+# CodeRabbit review configuration for Ben8368/OpenHID.
+#
+# This file alone enables nothing: CodeRabbit runs only after a maintainer
+# installs its GitHub App. It is advisory — `request_changes_workflow` and
+# `commit_status` are off, so it never blocks a merge and never adds a status
+# check that could be confused with the required `CI result` check.
+#
+# Formatting and static analysis stay owned by CI: rustfmt, Clippy, ast-grep,
+# actionlint, and shellcheck are disabled here rather than reported a second
+# time. See docs/GITHUB_AUTOMATION.md for the ownership map.
+
+language: en-US
+early_access: false
+enable_free_tier: true
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  commit_status: false
+  review_status: true
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  changed_files_summary: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  in_progress_fortune: false
+  poem: false
+  # The path labeler owns labels; reviewers are assigned deliberately.
+  suggested_labels: false
+  auto_apply_labels: false
+  suggested_reviewers: false
+  auto_assign_reviewers: false
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    base_branches:
+      - master
+    # Dependency and release PRs are reviewed by their own policy.
+    ignore_usernames:
+      - dependabot[bot]
+      - github-actions[bot]
+      - release-plz[bot]
+      - renovate[bot]
+
+  # Lockfiles and generated translation catalogs are not useful review input;
+  # dependency policy is enforced by cargo-deny and locale parity by tests.
+  path_filters:
+    - "!**/Cargo.lock"
+    - "!**/pnpm-lock.yaml"
+    - "!**/flake.lock"
+    - "!**/devenv.lock"
+    - "!crates/openhid-ui/locales/**"
+
+  pre_merge_checks:
+    # Rustdoc coverage is tracked by review, not a percentage threshold.
+    docstrings:
+      mode: off
+
+  tools:
+    clippy:
+      enabled: false
+    "ast-grep":
+      enabled: false
+    actionlint:
+      enabled: false
+    shellcheck:
+      enabled: false
+    markdownlint:
+      enabled: false
+    yamllint:
+      enabled: false
+    gitleaks:
+      enabled: true
+    "github-checks":
+      enabled: true
+
+  path_instructions:
+    - path: "crates/openhid-ipc/**"
+      instructions: |
+        The tarpc/bincode wire format is append-only and versioned. Flag any
+        change that removes or renumbers an existing field or enum variant,
+        breaks decoding of an older peer, or makes a client compare a raw
+        version number instead of matching `ConnectError::Skew`. Verify that
+        `PROTOCOL_VERSION` handling follows crates/openhid-ipc/AGENTS.md, and
+        do not propose a second encoder/decoder or a redundant version check.
+
+    - path: "crates/openhid-device/**"
+      instructions: |
+        This crate is host-free and speaks only to `HidBackend`. Focus on HID
+        session lifetime: handles must close on every error path, reconnects
+        must not leak sessions or leave a receiver owned twice, and blocking
+        I/O must stay off the async executor. Flag host-specific APIs, hidden
+        fallbacks that mask a failed open, and claims about hardware behavior
+        that have no test, fixture, or recorded evidence.
+
+    - path: "crates/openhid-hid/**"
+      instructions: |
+        Check transport, enumeration, and probe-cache lifetimes, plus platform
+        permission handling (macOS Input Monitoring, Linux device files).
+        A permission denial must surface as a typed error, not an empty device
+        list or an endless retry. Do not infer cross-platform behavior from one
+        target's code path.
+
+    - path: "crates/openhid-hidpp/**"
+      instructions: |
+        This is the hard-forked HID++ protocol crate. Flag changes that alter
+        report framing, feature discovery, retry/error classification, or
+        public compatibility with the upstream fork without a wire-level test.
+        Prefer explicit protocol errors over silent fallbacks.
+
+    - path: "crates/openhid-hook/**"
+      instructions: |
+        OS input capture is lifecycle-sensitive: event taps must be re-enabled
+        after timeout, evdev/uinput resources cleaned up on every exit path, and
+        callbacks must not block or panic. Flag swallowed events, re-entrant
+        activation, and thread-safety assumptions that are not proven by a
+        `Send`/`Sync` bound or a test.
+
+    - path: "crates/openhid-inject/**"
+      instructions: |
+        Input synthesis must never double-press, stick a modifier, or leave a
+        synthetic key held after cancellation. Check error handling on every OS
+        call and cleanup on drop.
+
+    - path: "crates/openhid-agent/**"
+      instructions: |
+        Check cancellation, reconnect/backoff loops, device-session ownership,
+        and shutdown ordering. A partial write must be reported, not retried
+        blindly; shutdown must not leave the hook or a HID session alive. Flag
+        unbounded tasks and blocking work on the runtime.
+
+    - path: "crates/openhid-agent-core/**"
+      instructions: |
+        Shared orchestration runs in the agent only. Flag state that can be
+        observed or mutated from multiple tasks without a clear owner, and any
+        new dependency that would also link into the GUI or overlay.
+
+    - path: "crates/openhid-desktop/**"
+      instructions: |
+        The GUI is a pure IPC client: it must not open HID devices or install
+        input hooks. Focus on GPUI entity lifecycle, subscription cleanup on
+        window close, and error states when the agent is unavailable. Keep
+        user-visible strings in the locale catalogs.
+
+    - path: "crates/openhid-ui/**"
+      instructions: |
+        This crate is linked by both the GUI and the sibling overlay; anything
+        added here also ships in the overlay. Flag heavy or platform-specific
+        dependencies, and keep state out of shared presentation code.
+
+    - path: "crates/openhid-overlay/**"
+      instructions: |
+        The overlay is a pure IPC client and a sibling process, not part of the
+        GUI. Check window/session teardown, focus and input-grab handling, and
+        that no HID or hook access is introduced.
+
+    - path: "**/*.rs"
+      instructions: |
+        Flag new `unsafe` blocks without a `// SAFETY:` justification, FFI
+        ownership or lifetime mistakes, and `Send`/`Sync` assumptions that are
+        not guaranteed by the type system. For `#[cfg(target_os = ...)]` code,
+        check that the other platforms still compile and that no path silently
+        returns a default on an unsupported target. Runtime failures should be
+        typed errors; `unwrap`/`expect` is acceptable only where the invariant
+        is local and proven.
+
+    - path: "xtask/**"
+      instructions: |
+        The workspace scripts control build, packaging, and release. Check
+        command failure propagation, path handling on all three hosts, and that
+        a skipped step cannot be reported as success. Flag any change that could
+        alter release tags, signing, or published artifacts without an explicit
+        reason.
+
+    - path: ".github/**"
+      instructions: |
+        Workflows must keep least-privilege permissions, pin external actions to
+        full commit SHAs, avoid `pull_request_target` with PR code checkout, and
+        preserve the `CI result` check identity. Flag new write permissions,
+        untrusted input interpolated into `run:`, and loops that could retrigger
+        themselves.
+
+    - path: "packaging/**"
+      instructions: |
+        Packaging controls installers, signing identities, and bundle layout.
+        Check that unsigned and signed builds stay separate, no credentials are
+        logged, and platform-specific metadata stays consistent.
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "AGENTS.md"
+      - ".agents/rules/**/*.md"
+      - "crates/*/AGENTS.md"
+      - "docs/REVIEW_POLICY.md"

@@ -1,0 +1,64 @@
+name: Stale
+
+# Marks inactive issues and pull requests so they stay visible in a triage
+# sweep. It never closes anything: both close delays are disabled, so a stale
+# label is advisory and reversible. Hardware support, device protocol,
+# platform-compatibility, blocked/upstream, and decision issues are exempt.
+# Security reports belong in private advisories, not the public tracker.
+on:
+  schedule:
+    # Mondays, 04:43 UTC: after the weekly validation runs.
+    - cron: "43 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stale
+  cancel-in-progress: false
+
+jobs:
+  mark:
+    name: Mark inactive issues and PRs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          days-before-issue-stale: 120
+          days-before-issue-close: -1
+          days-before-pr-stale: 90
+          days-before-pr-close: -1
+          stale-issue-label: "status: stale"
+          stale-pr-label: "status: stale"
+          stale-issue-message: |
+            This issue has had no activity for 120 days, so it is marked stale.
+            It will **not** be closed automatically. Comment or update it to
+            clear the label.
+          stale-pr-message: |
+            This pull request has had no activity for 90 days, so it is marked
+            stale. It will **not** be closed automatically. Push, rebase, or
+            comment to clear the label.
+          remove-stale-when-updated: true
+          exempt-all-milestones: true
+          exempt-issue-labels: >-
+            area: hid,
+            area: hidpp,
+            area: camera,
+            platform: macos,
+            platform: linux,
+            platform: windows,
+            platform: all,
+            status: blocked,
+            status: upstream,
+            needs: decision
+          exempt-pr-labels: >-
+            dependencies,
+            needs: build,
+            status: blocked,
+            status: upstream
+          operations-per-run: 30
