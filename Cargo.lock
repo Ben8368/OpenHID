@@ -5554,7 +5554,7 @@ dependencies = [
  "openhid-fixture",
  "openhid-hid",
  "openhid-ipc",
- "png 0.17.16",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "tarpc",
