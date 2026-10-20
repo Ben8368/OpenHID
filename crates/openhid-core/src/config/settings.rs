@@ -290,7 +290,7 @@ pub struct AppSettings {
     /// Whether the overlay shows a notice when a device's battery runs low.
     /// **On by default**, as in Logi Options+. A device announces itself once
     /// per discharge and again only after it has been charged; see
-    /// [`BatteryInfo::needs_attention`](crate::device::BatteryInfo::needs_attention)
+    /// [`battery_needs_attention`](crate::battery::battery_needs_attention)
     /// for what counts as low.
     #[serde(default = "default_true")]
     pub low_battery_notifications: bool,

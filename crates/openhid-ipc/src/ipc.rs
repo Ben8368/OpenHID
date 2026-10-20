@@ -556,7 +556,7 @@ pub struct LockKeyChange {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NoticeKind {
     /// A device's battery came to need attention
-    /// ([`BatteryInfo::needs_attention`]).
+    /// ([`battery_needs_attention`](openhid_core::battery::battery_needs_attention)).
     LowBattery {
         /// What to call the device: the name the user gave it, else the name
         /// it reports. `None` when it has neither, and the overlay names it

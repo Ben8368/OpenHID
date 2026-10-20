@@ -135,7 +135,7 @@ impl NoticeBoard {
 /// Which devices have had their low battery announced.
 ///
 /// A device is announced once per discharge: when its battery first needs
-/// attention ([`BatteryInfo::needs_attention`]), and again only after it has
+/// attention ([`battery_needs_attention`](openhid_core::battery::battery_needs_attention)), and again only after it has
 /// been charged. A reading that wobbles around the threshold is not a new
 /// discharge.
 ///
