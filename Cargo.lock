@@ -5478,7 +5478,7 @@ dependencies = [
  "rust-i18n",
  "serde_json",
  "succession",
- "sysinfo 0.38.4",
+ "sysinfo 0.39.6",
  "tarpc",
  "tempfile",
  "tokio",
@@ -8002,6 +8002,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sysinfo"
+version = "0.39.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2071df9448915b71c4fe6d25deaf1c22f12bd234f01540b77312bb8e41361e6"
+dependencies = [
+ "libc",
+ "memchr",
+ "ntapi",
+ "objc2-core-foundation",
+ "objc2-io-kit",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "system-configuration"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10458,7 +10472,7 @@ dependencies = [
  "sha2_hasher",
  "strum 0.27.2",
  "syn 3.0.9",
- "sysinfo 0.38.4",
+ "sysinfo 0.39.6",
  "tempfile",
  "time",
  "toml 0.8.23",
