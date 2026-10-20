@@ -7474,9 +7474,9 @@ dependencies = [
 
 [[package]]
 name = "sha2_hasher"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d05663bc5e688c3b23804a7810eef3610b4cea009096bc173be478a030f4ba6"
+checksum = "f640351956015febbc009f1c53c723a685b43aaf8b141a6a10de8098209027b8"
 dependencies = [
  "const-hex",
  "sha2 0.11.0",
