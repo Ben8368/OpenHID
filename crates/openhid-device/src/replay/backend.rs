@@ -659,6 +659,15 @@ impl HidBackend for ReplayBackend {
         )))
     }
 
+    async fn open_raw_session(
+        &self,
+        _node: &NodeInfo,
+    ) -> Result<Box<dyn crate::backend::RawSession>, BackendError> {
+        Err(BackendError::Backend(
+            "this backend has no raw input session".into(),
+        ))
+    }
+
     fn watch(&self) -> Result<HotplugStream, BackendError> {
         let (sender, mut receiver) = mpsc::unbounded_channel();
         self.watchers

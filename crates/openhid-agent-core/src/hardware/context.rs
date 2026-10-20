@@ -77,6 +77,69 @@ impl HardwareContext {
         super::light::apply_light(self, route, command).await
     }
 
+    /// Read the verified F87 PRO settings through this context's backend.
+    pub async fn read_aula_state(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError> {
+        let identity =
+            openhid_core::hid::aula::route_identity(route).ok_or(WriteError::DeviceNotFound)?;
+        self.device_io
+            .ensure_allowed()
+            .map_err(|_| WriteError::DeviceNotFound)?;
+        openhid_hid::aula::read_selected_config(&*self.backend, Some(identity))
+            .await
+            .map(|config| config.aula_state())
+            .map_err(|error| WriteError::Hid(error.to_string()))
+    }
+
+    /// Compatibility lighting view of the shared, verified settings snapshot.
+    pub async fn read_aula_lighting(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::LightingState, WriteError> {
+        self.read_aula_state(route)
+            .await
+            .map(|state| state.lighting)
+    }
+
+    /// Apply/save/preview verified settings in a worker that owns recovery.
+    /// Dropping the requesting RPC signals cancellation while recovery continues.
+    pub async fn set_aula_settings(
+        &self,
+        route: &DeviceRoute,
+        change: openhid_core::hid::aula::AulaChange,
+        mode: openhid_core::hid::aula::LightingMode,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError> {
+        let identity =
+            openhid_core::hid::aula::route_identity(route).ok_or(WriteError::DeviceNotFound)?;
+        openhid_hid::host::start_aula_settings_on(
+            Arc::clone(&self.backend),
+            self.device_io.clone(),
+            Some(identity),
+            change,
+            mode,
+        )
+        .await?
+        .finish()
+        .await
+        .map(|result| result.state)
+    }
+
+    /// Lighting-only requests share settings validation, worker and recovery.
+    pub async fn set_aula_lighting(
+        &self,
+        route: &DeviceRoute,
+        change: openhid_core::hid::aula::LightingChange,
+        mode: openhid_core::hid::aula::LightingMode,
+    ) -> Result<openhid_core::hid::aula::LightingState, WriteError> {
+        let change = openhid_core::hid::aula::AulaChange::new(Some(change), None)
+            .map_err(|error| WriteError::Hid(error.to_string()))?;
+        self.set_aula_settings(route, change, mode)
+            .await
+            .map(|state| state.lighting)
+    }
+
     pub(crate) fn set_light_in_background(
         &self,
         target: Option<DeviceRoute>,
@@ -155,3 +218,7 @@ impl HardwareContext {
 #[cfg(test)]
 #[path = "context/corpus_tests.rs"]
 mod corpus_tests;
+
+#[cfg(test)]
+#[path = "context/aula_tests.rs"]
+mod aula_tests;

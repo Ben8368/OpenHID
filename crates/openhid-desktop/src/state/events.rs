@@ -207,9 +207,20 @@ impl AppState {
         cx: &mut Context<V>,
         topic: impl Fn(&StateEvent) -> bool + 'static,
     ) -> Subscription {
-        cx.subscribe(&Self::global(cx), move |_, state, event, cx| {
+        Self::on_device_panel(cx, topic, |_, cx| cx.notify())
+    }
+
+    /// React to relevant device-panel events using the same relevance policy
+    /// as repaint-only subscribers. Retained editors can refresh request state
+    /// here without triggering I/O from render.
+    pub(crate) fn on_device_panel<V: 'static>(
+        cx: &mut Context<V>,
+        topic: impl Fn(&StateEvent) -> bool + 'static,
+        mut update: impl FnMut(&mut V, &mut Context<V>) + 'static,
+    ) -> Subscription {
+        cx.subscribe(&Self::global(cx), move |view, state, event, cx| {
             if state.read(cx).concerns_device_panel(event, &topic) {
-                cx.notify();
+                update(view, cx);
             }
         })
     }

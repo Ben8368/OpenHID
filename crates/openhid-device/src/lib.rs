@@ -19,6 +19,7 @@
 mod channel;
 mod device_io;
 
+pub mod aula;
 pub mod backend;
 pub mod backlight;
 pub mod host_lock;

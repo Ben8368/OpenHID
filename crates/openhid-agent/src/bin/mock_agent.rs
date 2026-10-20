@@ -965,6 +965,42 @@ impl Agent for MockAgent {
         info!(%route, slot, "rename_easy_switch_host");
         Ok(stored.clone())
     }
+    async fn read_aula_lighting(
+        self,
+        _: Context,
+        _route: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::LightingState, WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
+    async fn read_aula_settings(
+        self,
+        _: Context,
+        _: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
+    async fn set_aula_settings(
+        self,
+        _: Context,
+        _route: DeviceRoute,
+        _: openhid_core::hid::aula::AulaChange,
+        _: openhid_core::hid::aula::LightingMode,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
+    async fn set_aula_lighting(
+        self,
+        _: Context,
+        _route: DeviceRoute,
+        _change: openhid_core::hid::aula::LightingChange,
+        _mode: openhid_core::hid::aula::LightingMode,
+    ) -> Result<openhid_core::hid::aula::LightingState, WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
     /// The mock reports no changes on its lights, so it has none to keep.
     async fn reload_saved_config(
         self,

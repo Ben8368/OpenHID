@@ -1,0 +1,15 @@
+# LightingChange owns valid built-in effect and parameter ranges.
+id: aula-lighting-policy-owner
+language: rust
+severity: error
+message: Use openhid_core::hid::aula::LightingChange for F87 lighting validation and ranges.
+files:
+  - crates/**/aula.rs
+  - crates/**/aula/**/*.rs
+ignores:
+  - crates/openhid-core/src/hid/aula.rs
+  - "**/tests.rs"
+rule:
+  all:
+    - kind: range_expression
+    - regex: '^0\s*\.\.=\s*(18|4)$'

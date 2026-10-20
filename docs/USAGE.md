@@ -6,6 +6,14 @@ The `openhid` command-line tool. For install and configuration, see the
 ```sh
 openhid list                 # paired devices: slot, codename, kind, online, battery
 openhid assets sync          # pre-fetch device renders from the fastest available mirror
+openhid diag aula            # read and validate F87 PRO 2.4 GHz configuration (experimental)
+openhid diag aula --brightness 2 --preview # verify lighting and restore the full original snapshot
+openhid diag aula --effect 12 --brightness 3 --save # explicitly SAVE and read back
+openhid diag aula --matrix # experimental read-only raw key matrix
+openhid diag aula --matrix --backup f87-base-matrix.json # matrix-only export; no restore yet
+openhid diag aula --sleep 600 --preview # verify a sleep edit, then restore
+openhid diag aula --backup f87-config.json # configuration block; excludes keymaps/macros/RGB tables
+openhid diag aula --restore f87-config.json --save # restore validated configuration and verify
 openhid diag features        # dump every HID++ feature the active device reports
 openhid diag controls        # dump reprogrammable controls and capability flags
 openhid diag dpi             # read → write → read-back → restore DPI (smoke test)
@@ -19,6 +27,9 @@ Running `openhid` with no subcommand defaults to `list`. Set
 `OPENHID_LOG=debug` for verbose tracing in the CLI, GUI, or agent.
 
 `openhid diag pointer-speed` temporarily changes the selected device's pointer scaling. The command attempts to restore and verify the original scaling even when the test write fails. `--device NAME` selects a device; `--target RAW` sets the temporary 8.8 fixed-point value (`256` is 1×). By default, the command halves the current value, or doubles it when the raw value is `1`. Firmware may accept extreme values without clipping. A restoration error means the original speed could not be confirmed.
+
+Experimental AULA F87 PRO support and hardware acceptance steps are documented in
+[the device notes](devices/aula-f87-pro.md).
 
 ## Automation API
 

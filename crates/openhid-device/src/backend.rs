@@ -148,6 +148,24 @@ pub trait RawWriter: Send + Sync {
     async fn write_output_report(&mut self, report: &[u8]) -> Result<(), BackendError>;
 }
 
+/// A bidirectional raw-report connection, owned for one protocol transaction.
+///
+/// Dropping a connection must release its handles and any pending input read.
+#[expect(
+    clippy::allow_attributes,
+    reason = "async_trait expands double_must_use"
+)]
+#[allow(
+    clippy::double_must_use,
+    reason = "lint originates in async_trait expansion"
+)]
+#[async_trait]
+pub trait RawSession: RawWriter {
+    /// Read one complete input report, including its report ID.
+    /// A zero length means the device disconnected.
+    async fn read_input_report(&mut self, buffer: &mut [u8]) -> Result<usize, BackendError>;
+}
+
 /// The HID stack beneath OpenHID's HID++ layer.
 ///
 /// One implementation per host HID API. Everything above it — enumeration
@@ -190,6 +208,9 @@ pub trait HidBackend: Send + Sync {
 
     /// Open `node` for raw output reports.
     async fn open_raw_writer(&self, node: &NodeInfo) -> Result<Box<dyn RawWriter>, BackendError>;
+
+    /// Open a bidirectional raw-report connection to an enumerated collection.
+    async fn open_raw_session(&self, node: &NodeInfo) -> Result<Box<dyn RawSession>, BackendError>;
 
     /// Subscribe to node connect/disconnect events.
     fn watch(&self) -> Result<HotplugStream, BackendError>;

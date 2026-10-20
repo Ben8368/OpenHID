@@ -18,6 +18,7 @@ use crate::features::action_ring::ActionRingPanel;
 use crate::features::camera::controls::CameraControlsPanel;
 use crate::features::camera::preview::CameraPreview;
 use crate::features::keyboard::function_row::FunctionRowView;
+use crate::features::lighting::aula::AulaLightingPanel;
 use crate::features::lighting::keyboard_rgb::LightingPanel;
 use crate::features::lighting::standalone::LightPanel;
 use crate::features::mouse::view::MouseModelView;
@@ -153,7 +154,12 @@ impl DetailTab {
         if caps.pointer || caps.scroll_inversion || caps.hires_wheel {
             tabs.push(Self::Pointer);
         }
-        if caps.lighting {
+        if caps.lighting
+            || record
+                .route
+                .as_ref()
+                .is_some_and(|route| openhid_core::hid::aula::route_identity(route).is_some())
+        {
             tabs.push(Self::Lighting);
         }
         if record.light_capabilities.is_some() {
@@ -194,6 +200,7 @@ pub struct AppView {
     dpi_panel: Entity<DpiPanel>,
     smartshift_panel: Entity<SmartShiftPanel>,
     lighting_panel: Entity<LightingPanel>,
+    aula_lighting_panel: Entity<AulaLightingPanel>,
     camera_preview: Entity<CameraPreview>,
     camera_controls: Entity<CameraControlsPanel>,
     light_panel: Entity<LightPanel>,
@@ -276,6 +283,7 @@ impl AppView {
         let dpi_panel = cx.new(DpiPanel::new);
         let smartshift_panel = cx.new(SmartShiftPanel::new);
         let lighting_panel = cx.new(LightingPanel::new);
+        let aula_lighting_panel = cx.new(AulaLightingPanel::new);
         let camera_preview = cx.new(CameraPreview::new);
         let camera_controls = cx.new(CameraControlsPanel::new);
         let light_panel = cx.new(LightPanel::new);
@@ -297,6 +305,7 @@ impl AppView {
             dpi_panel,
             smartshift_panel,
             lighting_panel,
+            aula_lighting_panel,
             camera_preview,
             camera_controls,
             light_panel,
@@ -679,6 +688,7 @@ impl AppView {
                         dpi_panel: &self.dpi_panel,
                         smartshift_panel: &self.smartshift_panel,
                         lighting_panel: &self.lighting_panel,
+                        aula_lighting_panel: &self.aula_lighting_panel,
                         camera_preview: &self.camera_preview,
                         camera_controls: &self.camera_controls,
                         light_panel: &self.light_panel,

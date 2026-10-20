@@ -1,0 +1,18 @@
+# HardwareContext owns one settings lifecycle; lighting RPCs project it.
+id: aula-settings-owner
+language: rust
+severity: error
+message: Use HardwareContext::{read_aula_state,set_aula_settings} so lighting shares settings validation and recovery.
+files:
+  - crates/openhid-agent-core/src/**/*.rs
+rule:
+  any:
+    - pattern: openhid_hid::host::start_aula_lighting_on($$$ARGS)
+    - all:
+        - pattern: openhid_hid::aula::read_selected_config($$$ARGS)
+        - inside:
+            kind: function_item
+            has:
+              field: name
+              regex: '^read_aula_lighting$'
+            stopBy: end

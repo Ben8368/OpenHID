@@ -11,6 +11,7 @@ use clap::Subcommand;
 use openhid_core::device::DeviceInventory;
 use openhid_hid::{DeviceRoute, dump_features};
 
+pub mod aula;
 pub mod battery;
 pub mod controls;
 pub mod dpi;
@@ -22,6 +23,8 @@ pub mod wheel;
 
 #[derive(Debug, Subcommand)]
 pub enum DiagCmd {
+    /// Read F87 PRO wireless settings or apply recoverable lighting edits.
+    Aula(aula::AulaArgs),
     /// Dump every HID++ feature the active device reports.
     Features(features::FeaturesArgs),
     /// Dump HID++ 0x1b04 reprogrammable controls and capability flags.
@@ -46,6 +49,7 @@ impl DiagCmd {
         request_input_monitoring().await?;
 
         match self {
+            Self::Aula(args) => aula::run(args).await,
             Self::Features(args) => features::run(args).await,
             Self::Controls(args) => controls::run(args).await,
             Self::Battery(args) => battery::run(args).await,

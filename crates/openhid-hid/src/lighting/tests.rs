@@ -26,7 +26,7 @@ fn caller_runtime_destruction_does_not_drop_native_write_or_allow_successor_befo
     let (finish_restore, restore_done) = oneshot::channel();
     let caller = runtime();
     caller.block_on(async {
-        let job = LightingJob::spawn(&route(1), move |cancel| async move {
+        let job = LightingJob::<()>::spawn(&route(1), move |cancel| async move {
             first_events.lock().unwrap().push("claim submitted");
             started.send(()).unwrap();
             native_done.await.unwrap();
@@ -111,7 +111,7 @@ fn five_second_request_timeout_signals_but_retains_the_worker() {
 fn standalone_finish_does_not_return_at_the_request_deadline() {
     let (finish, proceed) = oneshot::channel();
     let (done, done_rx) = mpsc::channel();
-    let job = LightingJob::spawn(&route(5), move |_| async move {
+    let job = LightingJob::<()>::spawn(&route(5), move |_| async move {
         proceed.await.unwrap();
         Err(timed_out())
     })
@@ -158,4 +158,20 @@ fn cancelling_a_queued_job_does_not_run_its_operation() {
         ),
         "cancelled queued closure must be dropped without running"
     );
+}
+
+#[test]
+fn owned_job_returns_verified_data_after_requester_runtime_is_gone() {
+    let caller = runtime();
+    let (release, ready) = oneshot::channel();
+    let job = caller.block_on(async {
+        LightingJob::spawn(&route(6), move |_| async move {
+            ready.await.unwrap();
+            Ok(42_u8)
+        })
+        .unwrap()
+    });
+    drop(caller);
+    release.send(()).unwrap();
+    assert_eq!(runtime().block_on(job.finish()).unwrap(), 42);
 }

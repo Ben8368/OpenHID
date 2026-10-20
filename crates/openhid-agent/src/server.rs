@@ -383,6 +383,48 @@ impl Agent for AgentServer {
         self.event_monitor.poll()
     }
 
+    async fn read_aula_lighting(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::LightingState, WriteError> {
+        self.shared.hardware().read_aula_lighting(&route).await
+    }
+
+    async fn set_aula_lighting(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        change: openhid_core::hid::aula::LightingChange,
+        mode: openhid_core::hid::aula::LightingMode,
+    ) -> Result<openhid_core::hid::aula::LightingState, WriteError> {
+        self.shared
+            .hardware()
+            .set_aula_lighting(&route, change, mode)
+            .await
+    }
+
+    async fn read_aula_settings(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError> {
+        self.shared.hardware().read_aula_state(&route).await
+    }
+
+    async fn set_aula_settings(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        change: openhid_core::hid::aula::AulaChange,
+        mode: openhid_core::hid::aula::LightingMode,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError> {
+        self.shared
+            .hardware()
+            .set_aula_settings(&route, change, mode)
+            .await
+    }
+
     async fn set_light(
         self,
         _: Context,

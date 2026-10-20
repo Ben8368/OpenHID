@@ -1,0 +1,15 @@
+# The IPC client owner keeps F87 response deadlines above recovery phases.
+id: ipc-aula-request-owner
+language: rust
+severity: error
+message: Use openhid_ipc::client::aula::{read_lighting,set_lighting,read_settings,set_settings} so the RPC permits verified recovery.
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/openhid-ipc/src/client/aula.rs
+rule:
+  any:
+    - pattern: $CLIENT.read_aula_lighting($CONTEXT, $ROUTE)
+    - pattern: $CLIENT.set_aula_lighting($CONTEXT, $ROUTE, $CHANGE, $MODE)
+    - pattern: $CLIENT.read_aula_settings($CONTEXT, $ROUTE)
+    - pattern: $CLIENT.set_aula_settings($CONTEXT, $ROUTE, $CHANGE, $MODE)

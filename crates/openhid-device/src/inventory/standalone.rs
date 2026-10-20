@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use openhid_core::device::{DeviceKind, RawDeviceAddress, StandaloneDevice};
+use openhid_device_registry::aula::{DRIVER_ID as AULA_DRIVER_ID, matches_control};
 use openhid_device_registry::headset::{GAMING_HEADSET_DRIVER_ID, find_gaming_headset};
 use openhid_device_registry::litra::find_litra;
 
@@ -18,18 +19,34 @@ use crate::write::litra_capabilities;
 pub async fn enumerate_standalone(
     backend: &dyn HidBackend,
 ) -> Result<Vec<StandaloneDevice>, InventoryError> {
-    let devices = backend.enumerate().await?;
-    let devices: Vec<_> = devices
-        .into_iter()
-        .filter_map(|device| standalone_device(&device))
-        .collect();
+    let nodes = backend.enumerate().await?;
+    let mut devices: Vec<_> = nodes.iter().filter_map(standalone_device).collect();
     validate_no_ambiguous_nodes(&devices)?;
+    // Validate all routes before any probe. An unreachable keyboard stays
+    // visible offline without suppressing the other standalone devices.
+    for device in &mut devices {
+        if device.driver_id == AULA_DRIVER_ID
+            && let Some(node) = nodes.iter().find(|node| {
+                matches_control(
+                    node.vendor_id,
+                    node.product_id,
+                    node.usage_page,
+                    node.usage_id,
+                ) && node.identity() == device.address.identity
+            })
+        {
+            match crate::aula::read_config(backend, node).await {
+                Ok(_) => device.online = true,
+                Err(error) => tracing::debug!(%error, "AULA configuration probe failed"),
+            }
+        }
+    }
     Ok(devices)
 }
 
 /// Classifies one enumerated HID node against every standalone driver family
 /// OpenHID recognizes, in precedence order. `None` when no family claims it.
-fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevice> {
+pub(crate) fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevice> {
     if let Some(descriptor) = find_litra(
         device.vendor_id,
         device.product_id,
@@ -84,6 +101,32 @@ fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevi
         });
     }
 
+    if matches_control(
+        device.vendor_id,
+        device.product_id,
+        device.usage_page,
+        device.usage_id,
+    ) {
+        return Some(StandaloneDevice {
+            address: RawDeviceAddress {
+                vendor_id: device.vendor_id,
+                product_id: device.product_id,
+                usage_page: device.usage_page,
+                usage_id: device.usage_id,
+                identity: device.identity(),
+            },
+            display_name: "AULA F87 PRO (2.4 GHz)".into(),
+            manufacturer: device.manufacturer.clone(),
+            serial_number: device.serial_number.clone(),
+            unit_id: [0; 4],
+            kind: DeviceKind::Keyboard,
+            online: false,
+            capabilities: None,
+            light_capabilities: None,
+            driver_id: AULA_DRIVER_ID.into(),
+            registry_model_id: None,
+        });
+    }
     None
 }
 
@@ -94,7 +137,9 @@ fn standalone_device(device: &crate::backend::NodeInfo) -> Option<StandaloneDevi
 /// transient re-find hint, so two such nodes with the same tuple are
 /// indistinguishable and must not be exposed as independently selectable
 /// devices.
-fn validate_no_ambiguous_nodes(devices: &[StandaloneDevice]) -> Result<(), InventoryError> {
+pub(crate) fn validate_no_ambiguous_nodes(
+    devices: &[StandaloneDevice],
+) -> Result<(), InventoryError> {
     let mut groups: HashMap<(u16, u16, u16, u16), Vec<&StandaloneDevice>> = HashMap::new();
     for device in devices {
         let address = &device.address;

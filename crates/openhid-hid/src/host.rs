@@ -297,6 +297,134 @@ pub async fn enumerate_standalone() -> Result<Vec<StandaloneDevice>, InventoryEr
     openhid_device::inventory::standalone::enumerate_standalone(&*native_backend()).await
 }
 
+/// Start a wireless lighting edit in the existing owned lighting worker.
+/// CLI callers must await `finish`; GUI/agent callers may await `wait` without
+/// destroying the transaction's compensation when their request is cancelled.
+pub async fn start_aula_lighting(
+    identity: Option<&str>,
+    change: openhid_device::aula::LightingChange,
+    mode: openhid_device::aula::LightingMode,
+) -> Result<crate::lighting::LightingJob<openhid_device::aula::ConfigResult>, WriteError> {
+    start_aula_lighting_on(native_backend(), device_io_gate(), identity, change, mode).await
+}
+
+/// Start a recoverable transaction over the caller's backend, including injected hosts.
+pub async fn start_aula_lighting_on(
+    backend: Arc<dyn openhid_device::backend::HidBackend>,
+    device_io: DeviceIoGate,
+    identity: Option<&str>,
+    change: openhid_device::aula::LightingChange,
+    mode: openhid_device::aula::LightingMode,
+) -> Result<crate::lighting::LightingJob<openhid_device::aula::ConfigResult>, WriteError> {
+    start_aula_config_on(
+        backend,
+        device_io,
+        identity,
+        openhid_device::aula::ConfigChange::Lighting(change),
+        mode,
+    )
+    .await
+}
+
+/// Start a recoverable edit of the verified F87 PRO settings.
+pub async fn start_aula_settings(
+    identity: Option<&str>,
+    change: openhid_device::aula::AulaChange,
+    mode: openhid_device::aula::LightingMode,
+) -> Result<crate::lighting::LightingJob<openhid_device::aula::ConfigResult>, WriteError> {
+    start_aula_settings_on(native_backend(), device_io_gate(), identity, change, mode).await
+}
+
+/// Start a recoverable F87 PRO settings edit over an injected backend.
+pub async fn start_aula_settings_on(
+    backend: Arc<dyn openhid_device::backend::HidBackend>,
+    device_io: DeviceIoGate,
+    identity: Option<&str>,
+    change: openhid_device::aula::AulaChange,
+    mode: openhid_device::aula::LightingMode,
+) -> Result<crate::lighting::LightingJob<openhid_device::aula::ConfigResult>, WriteError> {
+    start_aula_config_on(
+        backend,
+        device_io,
+        identity,
+        openhid_device::aula::ConfigChange::Settings(change),
+        mode,
+    )
+    .await
+}
+
+/// Restore a validated configuration backup with owned recovery and route locking.
+pub async fn start_aula_restore(
+    identity: Option<&str>,
+    config: openhid_device::aula::WirelessConfig,
+    mode: openhid_device::aula::LightingMode,
+) -> Result<crate::lighting::LightingJob<openhid_device::aula::ConfigResult>, WriteError> {
+    start_aula_config_on(
+        native_backend(),
+        device_io_gate(),
+        identity,
+        openhid_device::aula::ConfigChange::Restore(config),
+        mode,
+    )
+    .await
+}
+
+async fn start_aula_config_on(
+    backend: Arc<dyn openhid_device::backend::HidBackend>,
+    device_io: DeviceIoGate,
+    identity: Option<&str>,
+    change: openhid_device::aula::ConfigChange,
+    mode: openhid_device::aula::LightingMode,
+) -> Result<crate::lighting::LightingJob<openhid_device::aula::ConfigResult>, WriteError> {
+    device_io
+        .ensure_allowed()
+        .map_err(|_| WriteError::DeviceNotFound)?;
+    let node = openhid_device::aula::select_node(&*backend, identity)
+        .await
+        .map_err(|error| WriteError::Hid(error.to_string()))?;
+    let identity = node.identity();
+    let address = openhid_core::device::RawDeviceAddress {
+        vendor_id: node.vendor_id,
+        product_id: node.product_id,
+        usage_page: node.usage_page,
+        usage_id: node.usage_id,
+        identity: identity.clone(),
+    };
+    let route = DeviceRoute::from(&address);
+    crate::lighting::LightingJob::spawn(&route, move |cancel| async move {
+        device_io
+            .ensure_allowed()
+            .map_err(|_| WriteError::DeviceNotFound)?;
+        openhid_device::aula::update_config(&*backend, Some(&identity), change, mode, || {
+            cancel.is_cancelled()
+        })
+        .await
+        .map_err(|error| WriteError::Hid(error.to_string()))
+    })
+}
+
+/// Read one F87 PRO wireless configuration without changing settings.
+/// Pass an exact raw-route identity to select among distinct serial-bearing devices.
+pub async fn read_aula_config(
+    identity: Option<&str>,
+) -> Result<openhid_device::aula::WirelessConfig, openhid_device::aula::ReadError> {
+    openhid_device::aula::read_selected_config(&*native_backend(), identity).await
+}
+
+/// Experimental read of raw F87 PRO wireless matrix entries; never writes assignments.
+pub async fn read_aula_matrix(
+    identity: Option<&str>,
+) -> Result<openhid_device::aula::WirelessMatrix, openhid_device::aula::ReadError> {
+    openhid_device::aula::read_selected_matrix(&*native_backend(), identity).await
+}
+
+/// Read the currently supported F87 PRO settings without writing.
+pub async fn read_aula_state(
+    identity: Option<&str>,
+) -> Result<openhid_device::aula::AulaState, openhid_device::aula::ReadError> {
+    Ok(read_aula_config(identity).await?.aula_state())
+}
+
 /// Subscribe to this host's HID hotplug events.
 pub fn watch_hotplug() -> Result<HotplugStream, InventoryError> {
     openhid_device::inventory::hotplug::watch_hotplug(&*native_backend())

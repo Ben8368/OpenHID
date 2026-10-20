@@ -24,6 +24,8 @@
 //! exactly one observe call in flight, under a request deadline that outlasts
 //! the agent's hold.
 
+pub mod aula;
+
 use std::cmp::Ordering;
 use std::future::Future;
 use std::pin::Pin;

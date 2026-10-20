@@ -13,7 +13,7 @@ use hidpp::channel::HidppChannel;
 
 use openhid_device::DeviceIoGate;
 use openhid_device::backend::{
-    BackendError, HidBackend, HotplugStream, NodeId, NodeInfo, RawWriter,
+    BackendError, HidBackend, HotplugStream, NodeId, NodeInfo, RawSession, RawWriter,
 };
 
 use crate::recording::{
@@ -231,6 +231,19 @@ impl HidBackend for NativeBackend {
         }
     }
 
+    async fn open_raw_session(&self, node: &NodeInfo) -> Result<Box<dyn RawSession>, BackendError> {
+        // The current recorder models output-only raw writers. Fail explicitly
+        // before I/O rather than presenting an incomplete duplex recording.
+        if self.recording.is_some() {
+            return Err(BackendError::Backend(
+                "bidirectional raw sessions are not supported by the HID++ fixture recorder".into(),
+            ));
+        }
+        self.device_io.ensure_allowed()?;
+        let device = self.handle(node)?;
+        super::raw_session::open(&device, self.device_io.clone()).await
+    }
+
     fn watch(&self) -> Result<HotplugStream, BackendError> {
         Ok(Box::new(watch_nodes()?))
     }
@@ -331,5 +344,31 @@ mod tests {
             RecordedChannelOpenOutcome::Failed(message) if message == &suspended
         ));
         assert!(recording.channels[0].closed_at.is_some());
+    }
+    #[tokio::test]
+    async fn raw_session_refuses_incomplete_recording_before_open() {
+        let recorder = NativeRecorder::new(8).unwrap();
+        let backend = NativeBackend::with_recording(recorder.sink());
+        let node = NodeInfo {
+            id: NodeId::from("not-opened".to_owned()),
+            vendor_id: 0,
+            product_id: 0,
+            usage_page: 0,
+            usage_id: 0,
+            name: String::new(),
+            manufacturer: None,
+            serial_number: None,
+        };
+        let Err(error) = backend.open_raw_session(&node).await else {
+            panic!("recorder opened duplex session")
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("not supported by the HID++ fixture recorder")
+        );
+        drop(backend);
+        let recording = recorder.finish().unwrap();
+        assert!(recording.raw_writers.is_empty());
     }
 }

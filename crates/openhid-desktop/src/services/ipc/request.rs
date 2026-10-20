@@ -17,6 +17,7 @@
 use std::future::Future;
 
 use openhid_core::config::{ConfigRevision, Lighting};
+use openhid_core::hid::aula::{AulaChange, AulaState, LightingMode};
 use openhid_core::hid::{
     BacklightChange, BacklightState, DeviceRoute, Dpi, DpiInfo, EasySwitchHosts, FnLockState,
     LightCommand, ReceiverSelector, ReportRate, ReportRateInfo, SmartShiftStatus, WriteError,
@@ -97,6 +98,45 @@ fn or_unavailable<T>(outcome: Result<Result<T, WriteError>, Unavailable>) -> Res
 fn log_rejection(what: &str, outcome: Result<Result<(), WriteError>, Unavailable>) {
     if let Ok(Err(error)) = outcome {
         warn!(%error, what, "agent rejected device command");
+    }
+}
+
+/// Read the selected F87 PRO settings through the agent.
+pub struct ReadAulaSettings {
+    pub route: DeviceRoute,
+    pub reply: oneshot::Sender<Result<AulaState, WriteError>>,
+}
+
+impl Request for ReadAulaSettings {
+    type Answer = Result<AulaState, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        openhid_ipc::client::aula::read_settings(client, self.route.clone()).await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, _: &UpdateSender) {
+        let _ = self.reply.send(or_unavailable(outcome));
+    }
+}
+
+/// Apply or save a validated F87 PRO settings edit.
+pub struct SetAulaSettings {
+    pub route: DeviceRoute,
+    pub change: AulaChange,
+    pub mode: LightingMode,
+    pub reply: oneshot::Sender<Result<AulaState, WriteError>>,
+}
+
+impl Request for SetAulaSettings {
+    type Answer = Result<AulaState, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        openhid_ipc::client::aula::set_settings(client, self.route.clone(), self.change, self.mode)
+            .await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, _: &UpdateSender) {
+        let _ = self.reply.send(or_unavailable(outcome));
     }
 }
 
@@ -735,6 +775,8 @@ macro_rules! commands {
 }
 
 commands! {
+    ReadAulaSettings,
+    SetAulaSettings,
     SetDpi,
     SetLighting,
     SetLight,

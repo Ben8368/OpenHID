@@ -114,7 +114,10 @@ pub use succession::Identity;
 ///      revision loads as a plain reload. `Agent::observe_backlight`
 ///      appended — the level a keyboard's backlight keys set, for the
 ///      overlay's transient indicator.
-pub const PROTOCOL_VERSION: u32 = 37;
+/// v38: `Agent::{read_aula_lighting, set_aula_lighting, read_aula_settings,
+///      set_aula_settings}` appended for verified F87 PRO wireless lighting
+///      and sleep settings, explicit persistence and preview.
+pub const PROTOCOL_VERSION: u32 = 38;
 
 /// Environment variable through which the agent hands a supervised helper the
 /// run token it will serve, so the helper knows which agent it belongs to
@@ -743,6 +746,28 @@ pub trait Agent {
     async fn observe_backlight(since: Generation) -> BacklightObservation;
     /// Clear only the exact tray request the settings app has displayed.
     async fn acknowledge_device_selection(request: DeviceSelection);
+    /// Read F87 PRO wireless lighting through the agent-owned hardware context.
+    async fn read_aula_lighting(
+        route: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::LightingState, WriteError>;
+    /// Apply/save a validated edit, or preview and restore the complete snapshot.
+    /// Returns the state actually left on the keyboard. Cancellation requests
+    /// recovery in an owned worker; success requires exact full readback.
+    async fn set_aula_lighting(
+        route: DeviceRoute,
+        change: openhid_core::hid::aula::LightingChange,
+        mode: openhid_core::hid::aula::LightingMode,
+    ) -> Result<openhid_core::hid::aula::LightingState, WriteError>;
+    /// Read all currently supported F87 PRO settings through the agent.
+    async fn read_aula_settings(
+        route: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError>;
+    /// Apply/save/preview verified F87 PRO settings with full readback.
+    async fn set_aula_settings(
+        route: DeviceRoute,
+        change: openhid_core::hid::aula::AulaChange,
+        mode: openhid_core::hid::aula::LightingMode,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError>;
 }
 
 /// One native-tray request scoped to an agent run and publication.
