@@ -21,7 +21,7 @@ openhid-assets = { path = "../openhid-assets", version = "0.8.14" }
 openhid-ipc = { path = "../openhid-ipc", version = "0.8.14" }
 atomic-write-file = { workspace = true }
 tarpc = { workspace = true }
-png = "0.17"
+png = "0.18"
 clap = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
