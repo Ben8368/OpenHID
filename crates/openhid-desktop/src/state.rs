@@ -65,6 +65,7 @@ use crate::state::devices::{build_device_list, pick_initial_device};
 
 mod action_ring;
 mod agent;
+mod aula;
 mod backlight;
 mod bindings;
 mod camera;

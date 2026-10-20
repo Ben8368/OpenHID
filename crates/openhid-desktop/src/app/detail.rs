@@ -25,6 +25,7 @@ use crate::features::action_ring::ActionRingPanel;
 use crate::features::camera::controls::CameraControlsPanel;
 use crate::features::camera::preview::CameraPreview;
 use crate::features::keyboard::function_row::FunctionRowView;
+use crate::features::lighting::aula::AulaLightingPanel;
 use crate::features::lighting::keyboard_rgb::LightingPanel;
 use crate::features::lighting::standalone::LightPanel;
 use crate::features::lighting::visual as light_visual;
@@ -97,6 +98,7 @@ pub(super) struct DetailPanels<'a> {
     pub dpi_panel: &'a gpui::Entity<DpiPanel>,
     pub smartshift_panel: &'a gpui::Entity<SmartShiftPanel>,
     pub lighting_panel: &'a gpui::Entity<LightingPanel>,
+    pub aula_lighting_panel: &'a gpui::Entity<AulaLightingPanel>,
     pub camera_preview: &'a gpui::Entity<CameraPreview>,
     pub camera_controls: &'a gpui::Entity<CameraControlsPanel>,
     pub light_panel: &'a gpui::Entity<LightPanel>,
@@ -128,7 +130,22 @@ pub(super) fn detail_content(
         DetailTab::Pointer => {
             pointer_tab(panels.dpi_panel, panels.smartshift_panel, cx).into_any_element()
         }
-        DetailTab::Lighting => lighting_tab(panels.lighting_panel).into_any_element(),
+        DetailTab::Lighting => {
+            let aula = AppState::try_read(cx)
+                .and_then(AppState::current_record)
+                .and_then(|record| record.route.as_ref())
+                .is_some_and(|route| openhid_core::hid::aula::route_identity(route).is_some());
+            let panel = if aula {
+                v_flex()
+                    .w_full()
+                    .gap_3()
+                    .child(panels.aula_lighting_panel.clone())
+                    .into_any_element()
+            } else {
+                panels.lighting_panel.clone().into_any_element()
+            };
+            lighting_tab(panel).into_any_element()
+        }
         DetailTab::Camera => {
             camera_tab(panels.camera_preview, panels.camera_controls).into_any_element()
         }
@@ -570,13 +587,13 @@ fn wheel_resolution_control(selected: Option<ScrollResolution>, enabled: bool) -
 /// Lighting tab: the RGB controls (swatches, on/off, brightness) in a titled
 /// card. Shown when the device reports a lighting capability — see
 /// [`DetailTab::tabs_for`].
-fn lighting_tab(lighting_panel: &gpui::Entity<LightingPanel>) -> impl IntoElement {
+fn lighting_tab(lighting_panel: gpui::AnyElement) -> impl IntoElement {
     tab_body(
         ContentWidth::Small,
         PanelCard::new(
             tr!("device.lighting"),
             Icon::new(IconName::Palette),
-            lighting_panel.clone().into_any_element(),
+            lighting_panel,
         ),
     )
 }

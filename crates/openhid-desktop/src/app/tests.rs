@@ -1440,3 +1440,24 @@ fn tray_navigation_survives_adoption_with_existing_window(cx: &mut gpui::TestApp
         assert!(record.online && record.model_info.is_none());
     });
 }
+
+#[test]
+fn aula_lighting_requires_the_verified_control_collection_without_hidpp_capabilities() {
+    let mut keyboard = record(DeviceKind::Keyboard, Some(Capabilities::default()));
+    keyboard.route = Some(openhid_core::hid::DeviceRoute::RawHid {
+        vendor_id: 0x3554,
+        product_id: 0xfa09,
+        usage_page: 0xff02,
+        usage_id: 2,
+        identity: "test-f87".into(),
+    });
+    assert_eq!(
+        DetailTab::tabs_for(&keyboard),
+        vec![DetailTab::Lighting, DetailTab::Device]
+    );
+    if let Some(openhid_core::hid::DeviceRoute::RawHid { usage_page, .. }) = keyboard.route.as_mut()
+    {
+        *usage_page = 0xff04;
+    }
+    assert_eq!(DetailTab::tabs_for(&keyboard), vec![DetailTab::Device]);
+}
