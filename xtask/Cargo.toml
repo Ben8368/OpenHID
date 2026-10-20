@@ -14,7 +14,7 @@ anyhow = { workspace = true }
 # Clearing the custom icon a run of the app may have left on a bundle.
 appicon = { git = "https://github.com/AprilNEA/appicon", tag = "v0.1.1" }
 # Sparkle's keys and EdDSA signatures are base64.
-base64 = "0.22.1"
+base64 = "0.23.1"
 clap = { workspace = true }
 comfy-table = { version = "8.0.0", default-features = false }
 # Signing the Sparkle appcast: plain Ed25519 over the whole DMG, as Sparkle's
