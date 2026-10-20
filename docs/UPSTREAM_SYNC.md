@@ -6,7 +6,9 @@ without tags so its releases do not become OpenHID release inputs:
 
 ```sh
 git remote add upstream https://github.com/AprilNEA/OpenLogi.git # first setup only
+git config --replace-all remote.upstream.fetch '+refs/heads/master:refs/remotes/upstream/master'
 git config remote.upstream.tagOpt --no-tags
+git remote set-url --push upstream DISABLED
 git fetch upstream master --no-tags
 git log --reverse --oneline <last-reviewed-upstream-sha>..upstream/master
 git diff <last-reviewed-upstream-sha> upstream/master
