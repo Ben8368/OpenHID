@@ -1,10 +1,10 @@
 //! Golden-bytes guard for the agent↔GUI wire format.
 //!
-//! The IPC transport serializes with tokio-serde's `Bincode::default()`, which
-//! is bincode 1.3 `DefaultOptions` — varint integers, little-endian, reject
-//! trailing. (The free functions `bincode::serialize`/`deserialize` use
-//! *fixint* encoding and would NOT match the wire — always go through
-//! [`bincode::Options`] here.)
+//! The tests call the transport's own [`encode_frame`]/[`decode_frame`], which
+//! use bincode-next's serde `standard()` configuration: varint integers,
+//! little-endian, and exactly one value per frame with no trailing bytes. That
+//! encoding is byte-identical to bincode 1.3 `DefaultOptions`, the format these
+//! goldens were first captured with, so the codec swap does not move the wire.
 //!
 //! bincode carries no field names or schema: struct field order, field types,
 //! and enum **variant order** are the encoding. These tests pin the exact
@@ -31,7 +31,6 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
-use bincode::Options;
 use openhid_core::app::ForegroundApp;
 use openhid_core::binding::{ActionRingIcon, ActionRingSlot, KeyCombo};
 use openhid_core::config::{ConfigRevision, Lighting, ScrollResolution};
@@ -48,6 +47,7 @@ use openhid_core::hid::{
     ScrollWheelMode, SmartShiftAutoDisengage, SmartShiftMode, SmartShiftStatus,
     SmartShiftThreshold, TunableTorque, WriteError,
 };
+use openhid_ipc::transport::{decode_frame, encode_frame};
 use openhid_ipc::{
     ActionRingCommandError, ActionRingInvocation, ActionRingPresentation, AgentRequest,
     AgentSnapshot, AgentStatus, BacklightObservation, ChosenLight, ClientKind, ConfigReloadError,
@@ -58,12 +58,9 @@ use openhid_ipc::{
 };
 use succession::{Compat, Run};
 
-/// Serialize exactly as the transport does (`tokio_serde::formats::Bincode`
-/// with its default `O = bincode::DefaultOptions`).
-fn wire_bytes<T: serde::Serialize>(value: &T) -> String {
-    let bytes = bincode::DefaultOptions::new()
-        .serialize(value)
-        .expect("wire types serialize");
+/// Serialize exactly as the transport does.
+fn wire_bytes<T: serde::Serialize + ?Sized>(value: &T) -> String {
+    let bytes = encode_frame(value).expect("wire types serialize");
     bytes.iter().fold(String::new(), |mut hex, b| {
         let _ = write!(hex, "{b:02x}");
         hex
@@ -85,9 +82,7 @@ where
         .step_by(2)
         .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("valid hex"))
         .collect::<Vec<u8>>();
-    let decoded: T = bincode::DefaultOptions::new()
-        .deserialize(&bytes)
-        .expect("wire types deserialize");
+    let decoded: T = decode_frame(&bytes).expect("wire types deserialize");
     let re_hex = wire_bytes(&decoded);
     assert_eq!(
         hex, re_hex,
@@ -1121,9 +1116,7 @@ fn aula_invalid_wire_edits_are_refused_before_dispatch() {
         vec![0, 0, 1, 5],
         vec![1, 0, 1, 1, 0],
     ] {
-        bincode::DefaultOptions::new()
-            .deserialize::<LightingChange>(&bytes)
-            .unwrap_err();
+        decode_frame::<LightingChange>(&bytes).unwrap_err();
     }
 }
 
@@ -1177,14 +1170,10 @@ fn aula_settings_wire_contract() {
 fn aula_invalid_settings_wire_edits_are_refused_before_dispatch() {
     use openhid_core::hid::aula::{AulaChange, SleepTimeout};
     for bytes in [vec![0, 0], vec![0, 1, 61], vec![0, 1, 0xfb, 0x2d, 0x01]] {
-        bincode::DefaultOptions::new()
-            .deserialize::<AulaChange>(&bytes)
-            .unwrap_err();
+        decode_frame::<AulaChange>(&bytes).unwrap_err();
     }
     for seconds in [0u16, 61, 301, 1201, u16::MAX] {
-        let encoded = bincode::DefaultOptions::new().serialize(&seconds).unwrap();
-        bincode::DefaultOptions::new()
-            .deserialize::<SleepTimeout>(&encoded)
-            .unwrap_err();
+        let encoded = encode_frame(&seconds).unwrap();
+        decode_frame::<SleepTimeout>(&encoded).unwrap_err();
     }
 }

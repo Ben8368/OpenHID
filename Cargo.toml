@@ -52,7 +52,14 @@ interprocess = { version = "2", features = ["tokio"] }
 # 0.38 is a hard floor: earlier releases hard-depend on opentelemetry 0.30 (not
 # feature-gated — google/tarpc#564), which drags the vulnerable
 # opentelemetry_sdk 0.30 into the graph (GHSA-w9wp-h8wv-79jx).
-tarpc = { version = "0.38", features = ["serde1", "serde-transport", "serde-transport-bincode", "tokio1"] }
+# `serde-transport-bincode` stays off: openhid-ipc supplies its own codec, so
+# tokio-serde's unmaintained bincode 1.x is not in the graph.
+tarpc = { version = "0.38", features = ["serde1", "serde-transport", "tokio1"] }
+# The maintained bincode fork behind openhid-ipc's transport codec. Its serde
+# `standard()` encoding is byte-identical to bincode 1.3 `DefaultOptions`, which
+# the golden wire tests pin, so this is a dependency swap and not a wire change.
+bincode-next = { version = "3.1.1", default-features = false, features = ["std", "serde"] }
+bytes = "1"
 windows-sys = "0.61"
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "sync", "time"] }
 futures-lite = "2"

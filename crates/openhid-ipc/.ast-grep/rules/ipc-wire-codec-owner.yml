@@ -1,0 +1,25 @@
+# Owner: openhid_ipc::transport::{encode_frame, decode_frame} — the only
+# serializer and configuration for the agent↔GUI wire. The golden tests call
+# the same functions, so the bytes they pin are the bytes the transport sends.
+id: ipc-wire-codec-owner
+language: rust
+severity: error
+message: Encode and decode IPC frames through openhid_ipc::transport::{encode_frame,decode_frame}; the wire codec (bincode-next standard) has one owner.
+note: |
+  A second bincode serializer with a slightly different configuration can keep
+  the goldens green while corrupting frames. See "Single source of truth" in
+  AGENTS.md and crates/openhid-ipc/AGENTS.md.
+files:
+  - "crates/**/*.rs"
+ignores:
+  - crates/openhid-ipc/src/transport.rs
+rule:
+  any:
+    - kind: scoped_identifier
+      regex: '^bincode_next::'
+      not:
+        inside:
+          kind: scoped_identifier
+          regex: '^bincode_next::'
+    - kind: use_declaration
+      regex: '\bbincode_next\b'

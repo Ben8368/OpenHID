@@ -1,7 +1,9 @@
 # openhid-ipc — the wire format is append-only
 
-The GUI and agent speak tarpc over bincode on an `interprocess` local socket
-(`openhid-ipc/src/ipc.rs`). bincode encodes the enum **variant index** and
+The GUI and agent speak tarpc over bincode-next's serde encoding on an
+`interprocess` local socket (`openhid-ipc/src/ipc.rs`). The transport codec
+(`transport::BincodeNext`) is byte-identical to bincode 1.3 `DefaultOptions`.
+bincode encodes the enum **variant index** and
 tarpc encodes the **method order**, so the wire format is positional:
 
 - Service methods are append-only; never reorder or remove. `protocol_version` must
@@ -29,9 +31,12 @@ tarpc encodes the **method order**, so the wire format is positional:
 
   Two dev builds of one unreleased version can then disagree on the wire without a
   version error; rebuild both.
-- The goldens use tokio-serde's `Bincode::default()` = bincode `DefaultOptions`
-  (varint, little-endian); the free `bincode::serialize` functions are fixint and do
-  NOT produce matching bytes.
+- The transport codec is `transport::BincodeNext` (bincode-next serde
+  `standard()`: varint, little-endian, exactly one value per frame). Its bytes are
+  identical to the bincode 1.3 `DefaultOptions` these goldens were captured with.
+  Tests must encode/decode through `transport::encode_frame`/`decode_frame`, never
+  a second serializer: a codec that drifts one byte would otherwise keep the
+  goldens green while breaking the wire.
 - Debug-build agents never take over a running release agent — that is by design (a
   dev agent must not displace the user's production agent), not a bug.
 
