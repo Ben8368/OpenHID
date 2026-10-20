@@ -1,0 +1,41 @@
+name: Labeler
+
+# Path labels for pull requests, including PRs opened from forks.
+#
+# `pull_request_target` is deliberate: `pull_request` runs with a read-only
+# token on fork PRs, so it cannot apply labels there. The safety invariant that
+# makes this event acceptable is enforced right here — the job only checks out
+# the trusted base revision, never checks out or executes the head revision,
+# receives no secrets, and requests `pull-requests: write` and nothing else.
+# Do not add a checkout of `github.event.pull_request.head.*`, run code from the
+# PR, or widen these permissions.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: labeler-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    name: Apply path labels
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The base revision holds the trusted label mapping.
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      # sync-labels stays false: labels applied by a maintainer (for example
+      # `needs: build`) must not be removed when a later push changes paths.
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          sync-labels: false

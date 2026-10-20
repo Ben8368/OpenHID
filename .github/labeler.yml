@@ -1,0 +1,128 @@
+# Path-based pull request labels for Ben8368/OpenHID.
+#
+# The labeler workflow (.github/workflows/labeler.yml) applies these from the
+# base revision of the pull request, so a contributor cannot change the mapping
+# for their own PR. Every label below must exist in the repository; labels are
+# created once during activation (docs/GITHUB_AUTOMATION.md).
+#
+# The first matching rule does not stop later rules: a PR touching IPC and the
+# GUI gets both labels, which is intended. Keep labels in the existing
+# `area:` / `type:` families used by the issue forms.
+
+"area: ipc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/openhid-ipc/**"
+
+"area: agent":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/openhid-agent/**"
+          - "crates/openhid-agent-core/**"
+
+"area: input":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/openhid-hook/**"
+          - "crates/openhid-inject/**"
+
+# HID++ and the host plumbing around it: hardware protocol, enumeration,
+# sessions, fixtures, and the receiver registry.
+"area: hid":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/openhid-device/**"
+          - "crates/openhid-hid/**"
+          - "crates/openhid-hidpp/**"
+          - "crates/openhid-hidpp-derive/**"
+          - "crates/openhid-device-registry/**"
+          - "crates/openhid-fixture/**"
+
+"area: hidpp":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/openhid-hidpp/**"
+          - "crates/openhid-hidpp-derive/**"
+
+# The GUI process, the sibling overlay, and everything they share.
+"area: gui":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/openhid-desktop/**"
+          - "crates/openhid-ui/**"
+          - "crates/openhid-overlay/**"
+
+"area: cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/openhid/**"
+          - "crates/openhid-cli/**"
+
+"area: core":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/openhid-core/**"
+
+"area: camera":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/openhid-camera/**"
+
+"area: permissions":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/openhid-permissions/**"
+
+"area: assets":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/openhid-assets/**"
+          - "design/**"
+
+# Any manifest or lockfile change is a dependency change, whether it comes from
+# Dependabot or a feature PR.
+"dependencies":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Cargo.toml"
+          - "Cargo.lock"
+          - "**/Cargo.toml"
+          - "**/build.rs"
+
+"area: ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+
+# Developer tooling: the CI runner's own source, the Nix/devenv shell, lint
+# configuration that is not itself a workflow, and hook configuration.
+"area: tooling":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "xtask/**"
+          - "flake.nix"
+          - "flake.lock"
+          - "devenv.nix"
+          - "devenv.yaml"
+          - "devenv.lock"
+          - ".envrc"
+          - ".config/**"
+          - "sgconfig.yml"
+          - "**/.ast-grep/**"
+          - "rust-toolchain.toml"
+          - "rustfmt.toml"
+          - "prek.toml"
+
+"type: packaging":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "packaging/**"
+
+# Documentation, including the agent guides and the PR/issue templates. A
+# `.github/**` PR that edits Markdown intentionally gets both `area: ci` and
+# `documentation`.
+"documentation":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "**/*.md"

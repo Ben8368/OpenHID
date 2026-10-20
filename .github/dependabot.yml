@@ -3,6 +3,7 @@ version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    labels: ["dependencies", "github_actions"]
     schedule:
       interval: weekly
       day: monday
@@ -21,6 +22,7 @@ updates:
 
   - package-ecosystem: cargo
     directory: /
+    labels: ["dependencies", "rust"]
     schedule:
       interval: weekly
       day: monday
@@ -39,6 +41,7 @@ updates:
 
   - package-ecosystem: npm
     directory: /.github/scripts/release-notes
+    labels: ["dependencies"]
     schedule:
       interval: weekly
       day: monday
@@ -57,6 +60,7 @@ updates:
 
   - package-ecosystem: pip
     directory: /.github/scripts/governance
+    labels: ["dependencies"]
     schedule:
       interval: monthly
       time: "09:45"
