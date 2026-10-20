@@ -16,7 +16,7 @@ rule:
             regex: '^prettify_codename$'
     - all:
         - kind: match_arm
-        - regex: '(DeviceKind|Self)::[A-Za-z]+\s*=>\s*"(device|camera)\.'
+        - regex: 'DeviceKind::[A-Za-z]+\s*=>[\s\S]*"(device|camera)\.'
     - all:
         - kind: function_item
         - has:
