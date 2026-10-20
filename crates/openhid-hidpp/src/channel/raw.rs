@@ -120,19 +120,152 @@ pub(super) async fn supports_short_long_hidpp(
 /// A device that reports the ID without the matching usage is not speaking
 /// HID++ on it, so both halves have to hold.
 fn declares_report(descriptor: &ReportDescriptor, report_id: u8, usage: u16) -> bool {
+    let usage = Usage::from_page_and_id(UsagePage::from(HIDPP_USAGE_PAGE), UsageId::from(usage));
     descriptor
         .find_input_report(&[report_id])
         .and_then(|report| report.fields().first())
         .and_then(|field| match field {
-            Field::Array(arr) => Some(arr.usage_range()),
+            Field::Array(arr) => Some(arr),
             _ => None,
         })
-        .is_some_and(|range| {
-            range
-                .lookup_usage(&Usage::from_page_and_id(
-                    UsagePage::from(HIDPP_USAGE_PAGE),
-                    UsageId::from(usage),
-                ))
-                .is_some()
+        .is_some_and(|array| {
+            array.usage_range().map_or_else(
+                || array.usages().contains(&usage),
+                |range| range.lookup_usage(&usage).is_some(),
+            )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_probe_requires_the_matching_report_and_usage_range() {
+        let bytes = [
+            0x06,
+            0x00,
+            0xff, // vendor usage page
+            0x09,
+            0x01,
+            0xa1,
+            0x01, // application collection
+            0x85,
+            SHORT_REPORT_ID,
+            0x15,
+            0x00,
+            0x26,
+            0xff,
+            0x00,
+            0x19,
+            0x01,
+            0x29,
+            0x01, // usage range: short reports only
+            0x75,
+            0x08,
+            0x95,
+            0x06,
+            0x81,
+            0x00,
+            0xc0,
+        ];
+        let descriptor = ReportDescriptor::try_from(bytes.as_slice()).unwrap();
+        assert!(declares_report(
+            &descriptor,
+            SHORT_REPORT_ID,
+            SHORT_REPORT_USAGE
+        ));
+        assert!(!declares_report(
+            &descriptor,
+            SHORT_REPORT_ID,
+            LONG_REPORT_USAGE
+        ));
+        assert!(!declares_report(
+            &descriptor,
+            LONG_REPORT_ID,
+            SHORT_REPORT_USAGE
+        ));
+    }
+
+    #[test]
+    fn report_probe_accepts_an_explicit_usage_without_a_range() {
+        let bytes = [
+            0x06,
+            0x00,
+            0xff,
+            0x09,
+            0x01,
+            0xa1,
+            0x01,
+            0x85,
+            SHORT_REPORT_ID,
+            0x15,
+            0x00,
+            0x26,
+            0xff,
+            0x00,
+            0x09,
+            0x01, // individual usage, no minimum/maximum range
+            0x75,
+            0x08,
+            0x95,
+            0x06,
+            0x81,
+            0x00,
+            0xc0,
+        ];
+        let descriptor = ReportDescriptor::try_from(bytes.as_slice()).unwrap();
+        assert!(declares_report(
+            &descriptor,
+            SHORT_REPORT_ID,
+            SHORT_REPORT_USAGE
+        ));
+        assert!(!declares_report(
+            &descriptor,
+            SHORT_REPORT_ID,
+            LONG_REPORT_USAGE
+        ));
+    }
+
+    #[test]
+    fn report_probe_does_not_turn_discrete_usages_into_a_range() {
+        let bytes = [
+            0x06,
+            0x00,
+            0xff,
+            0x09,
+            0x01,
+            0xa1,
+            0x01,
+            0x85,
+            SHORT_REPORT_ID,
+            0x15,
+            0x00,
+            0x26,
+            0xff,
+            0x00,
+            0x09,
+            0x00,
+            0x09,
+            0x02, // discrete usages 0 and 2; usage 1 is absent
+            0x75,
+            0x08,
+            0x95,
+            0x06,
+            0x81,
+            0x00,
+            0xc0,
+        ];
+        let descriptor = ReportDescriptor::try_from(bytes.as_slice()).unwrap();
+        assert!(!declares_report(
+            &descriptor,
+            SHORT_REPORT_ID,
+            SHORT_REPORT_USAGE
+        ));
+        assert!(declares_report(
+            &descriptor,
+            SHORT_REPORT_ID,
+            LONG_REPORT_USAGE
+        ));
+    }
 }
