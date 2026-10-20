@@ -84,10 +84,7 @@ Compatible minor/patch updates are grouped per ecosystem; major updates remain
 separate. A seven-day cooldown and small PR limits bound update noise. Security
 alerts/updates should be enabled in the repository's Code security settings;
 security updates are not delayed by version-update cooldown. Cargo git/path
-dependencies still need maintainer review. `bincode` 3.x is an explicit ignore:
-3.0.0 is that project's terminal unmaintained release, a `compile_error!`
-placeholder rather than an upgrade. Runtime IPC still uses bincode 1.3 through
-tokio-serde, and the IPC wire goldens mirror that version. Each update PR
+dependencies still need maintainer review. Each update PR
 carries the `dependencies` label, and the Cargo and Actions ecosystems keep
 their `rust` and `github_actions` labels; the labeler adds `area: ci` for
 changes under `.github/**` and `dependencies` for Cargo manifest and lockfile

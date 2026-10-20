@@ -204,7 +204,7 @@ crates/
   openhid-hook/           OS input capture: CGEventTap / evdev+uinput / WH_MOUSE_LL
   openhid-inject/         OS input synthesis: CGEvent / uinput+MPRIS / SendInput
   openhid-agent-core/     shared agent orchestration (hook, HID++ writes, DPI, Actions Ring)
-  openhid-ipc/            tarpc/bincode IPC contract + local-socket transport
+  openhid-ipc/            tarpc/bincode-next IPC contract + local-socket transport
   openhid-agent/          openhid-agent binary — runtime HID/input server
   openhid-permissions/    privacy-permission status + Settings deep links (reads only)
   openhid-ui/             shared GPUI presentation — gpui, not gpui-component
