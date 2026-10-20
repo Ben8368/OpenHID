@@ -85,10 +85,11 @@ separate. A seven-day cooldown and small PR limits bound update noise. Security
 alerts/updates should be enabled in the repository's Code security settings;
 security updates are not delayed by version-update cooldown. Cargo git/path
 dependencies still need maintainer review. Each update PR carries the
-`dependencies` label; the labeler adds `area: ci` for changes under `.github/**`
-and `dependencies` for Cargo manifest and lockfile changes. Labels are triage
-metadata: no dependency PR is auto-approved or auto-merged, and hardware support
-issues are never closed by the stale workflow.
+`dependencies` label, and the Cargo and Actions ecosystems keep their `rust` and
+`github_actions` labels; the labeler adds `area: ci` for changes under
+`.github/**` and `dependencies` for Cargo manifest and lockfile changes. Labels
+are triage metadata: no dependency PR is auto-approved or auto-merged, and
+hardware support issues are never closed by the stale workflow.
 
 ## Optional services
 

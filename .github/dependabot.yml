@@ -3,7 +3,7 @@ version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
-    labels: ["dependencies"]
+    labels: ["dependencies", "github_actions"]
     schedule:
       interval: weekly
       day: monday
@@ -22,7 +22,7 @@ updates:
 
   - package-ecosystem: cargo
     directory: /
-    labels: ["dependencies"]
+    labels: ["dependencies", "rust"]
     schedule:
       interval: weekly
       day: monday
