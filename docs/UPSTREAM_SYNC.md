@@ -28,15 +28,16 @@ recorded in [PROVENANCE.md](PROVENANCE.md).
 ## Reviewed through 2026-10-20
 
 Last reviewed upstream commit:
-[`5efc207610b7e26ae45b08a23f99e10876ab6213`](https://github.com/AprilNEA/OpenLogi/commit/5efc207610b7e26ae45b08a23f99e10876ab6213).
+[`1cabbd1bb3d8d0cd0dc01a9edbcd33122684b0f6`](https://github.com/AprilNEA/OpenLogi/commit/1cabbd1bb3d8d0cd0dc01a9edbcd33122684b0f6).
 
 | Upstream change | Decision and OpenHID adaptation |
 | --- | --- |
 | [Low-battery notices, #1891](https://github.com/AprilNEA/OpenLogi/pull/1891) | Ported agent-owned notice lifetimes, once-per-discharge tracking, overlay cards and preferences. Reuses `openhid_core::battery::battery_needs_attention`, including freshness validation; stale or invalid readings cannot rearm a discharge. |
 | [Lock-key indicators, #1898](https://github.com/AprilNEA/OpenLogi/pull/1898) | Ported HID++ 0x4220 decoding, per-connection baseline, agent observations, overlay indicator and preferences. Appends RPCs after OpenHID's tray and AULA methods under development protocol 38. |
 | [Late reconnect response, #1899](https://github.com/AprilNEA/OpenLogi/pull/1899) | Ported connection-generation validation so an old lock-state read cannot populate the new connection's baseline. |
+| [Wayland multi-display ring, #1906](https://github.com/AprilNEA/OpenLogi/pull/1906) | Ported output-specific layer-shell windows, shared pointer ownership and remembered compositor refusal. One display's failure does not suppress the other windows; ordinary windows remain the compositor fallback. |
 
-All three changes were authored upstream by Xuan Zhang. OpenHID retains its
+All four changes were authored upstream by Xuan Zhang. OpenHID retains its
 battery freshness semantics, native tray behavior, AULA support, independent
 identity, and release configuration. This ledger records review decisions;
 it does not establish hardware or native UI verification on another OS.
