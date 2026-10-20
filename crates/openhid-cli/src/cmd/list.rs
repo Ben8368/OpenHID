@@ -6,7 +6,9 @@ use std::{
 use anyhow::{Context, Result};
 use clap::Args;
 use openhid_camera::Camera;
-use openhid_core::device::{BatteryInfo, DeviceInventory, DeviceModelInfo, PairedDevice};
+use openhid_core::device::{
+    BatteryInfo, DeviceInventory, DeviceModelInfo, PairedDevice, StandaloneDevice,
+};
 use openhid_ipc::client::ConnectError;
 use openhid_ipc::{AgentSnapshot, AgentStatus};
 
@@ -17,7 +19,7 @@ pub struct ListArgs {}
 /// from the failure status a real enumeration error produces.
 const NOTHING_FOUND: u8 = 2;
 
-/// Print every connected receiver, paired device and Logitech webcam.
+/// Print receivers, paired devices, standalone HID devices and Logitech webcams.
 ///
 /// Reads the running agent's inventory when one is reachable — the agent is
 /// the process that actually holds device permissions, so its answer is the
@@ -26,13 +28,17 @@ const NOTHING_FOUND: u8 = 2;
 /// agent responds; the provenance goes to stderr so scripts keep parsing
 /// stdout.
 ///
-/// Returns the `NOTHING_FOUND` status when neither a HID++ device nor a webcam
+/// Returns the `NOTHING_FOUND` status when no supported hardware
 /// is present, so scripts can tell "no hardware" apart from a failed
 /// enumeration.
 pub async fn run(_args: ListArgs) -> Result<ExitCode> {
-    let (inventories, agent_status) = if let Some(snapshot) = agent_snapshot().await {
+    let (inventories, standalone, agent_status) = if let Some(snapshot) = agent_snapshot().await {
         eprintln!("(inventory read from the running agent)");
-        (snapshot.inventory, Some(snapshot.status))
+        (
+            snapshot.inventory,
+            snapshot.standalone,
+            Some(snapshot.status),
+        )
     } else {
         eprintln!(
             "(no agent reachable — reading hardware directly; macOS judges this \
@@ -41,12 +47,15 @@ pub async fn run(_args: ListArgs) -> Result<ExitCode> {
         let inventories = openhid_hid::enumerate()
             .await
             .context("failed to enumerate HID++ devices")?;
-        (inventories, None)
+        let standalone = openhid_hid::enumerate_standalone()
+            .await
+            .context("failed to enumerate standalone HID devices")?;
+        (inventories, standalone, None)
     };
     let cameras = openhid_camera::enumerate_cameras();
 
-    if inventories.is_empty() && cameras.is_empty() {
-        println!("No Logitech HID++ devices or webcams found.");
+    if inventories.is_empty() && standalone.is_empty() && cameras.is_empty() {
+        println!("No supported HID devices or webcams found.");
         println!();
         print_empty_notes(agent_status.as_ref());
         return Ok(ExitCode::from(NOTHING_FOUND));
@@ -59,8 +68,18 @@ pub async fn run(_args: ListArgs) -> Result<ExitCode> {
         print_inventory(inv);
     }
 
-    if !cameras.is_empty() {
+    if !standalone.is_empty() {
         if !inventories.is_empty() {
+            println!();
+        }
+        println!("Standalone HID devices ({})", standalone.len());
+        for device in &standalone {
+            println!("  {}", StandaloneDisplay(device));
+        }
+    }
+
+    if !cameras.is_empty() {
+        if !inventories.is_empty() || !standalone.is_empty() {
             println!();
         }
         print_cameras(&cameras);
@@ -126,6 +145,26 @@ fn print_empty_notes(status: Option<&AgentStatus>) {
                  packages; for a source build see docs/INSTALL-linux.md)."
             );
         }
+    }
+}
+
+struct StandaloneDisplay<'a>(&'a StandaloneDevice);
+
+impl fmt::Display for StandaloneDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let device = self.0;
+        let address = &device.address;
+        let dot = if device.online { "●" } else { "○" };
+        write!(
+            f,
+            "{dot} {} ({}, vid={:04x} pid={:04x}, driver={}, identity={})",
+            device.display_name,
+            LowercaseDebug(device.kind),
+            address.vendor_id,
+            address.product_id,
+            device.driver_id,
+            address.identity
+        )
     }
 }
 
@@ -445,5 +484,37 @@ mod format_tests {
         let out = DeviceModelDisplay(&m).to_string();
         assert!(out.contains("transports=usb+btle+bt"));
         assert!(out.contains("serial=SN123"));
+    }
+    #[test]
+    fn standalone_keyboard_shows_online_state_and_selection_identity() {
+        let mut device = openhid_core::device::StandaloneDevice {
+            address: openhid_core::device::RawDeviceAddress {
+                vendor_id: 0x3554,
+                product_id: 0xfa09,
+                usage_page: 0xff02,
+                usage_id: 2,
+                identity: "serial:test".into(),
+            },
+            display_name: "AULA F87 PRO (2.4 GHz)".into(),
+            manufacturer: None,
+            serial_number: None,
+            unit_id: [0; 4],
+            kind: DeviceKind::Keyboard,
+            online: true,
+            capabilities: None,
+            light_capabilities: None,
+            driver_id: "aula-f87-pro-wireless".into(),
+            registry_model_id: None,
+        };
+        let output = super::StandaloneDisplay(&device).to_string();
+        assert!(output.starts_with("● AULA F87 PRO"));
+        assert!(output.contains("keyboard, vid=3554 pid=fa09"));
+        assert!(output.contains("identity=serial:test"));
+        device.online = false;
+        assert!(
+            super::StandaloneDisplay(&device)
+                .to_string()
+                .starts_with("○")
+        );
     }
 }

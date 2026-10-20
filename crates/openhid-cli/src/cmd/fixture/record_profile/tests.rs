@@ -109,6 +109,42 @@ impl TestAgent {
     reason = "the in-process IPC service intentionally returns immediate scripted values"
 )]
 impl Agent for TestAgent {
+    async fn read_aula_lighting(
+        self,
+        _: TarpcContext,
+        _: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::LightingState, WriteError> {
+        unreachable!("profile capture must use the snapshot, without standalone settings reads")
+    }
+
+    async fn read_aula_settings(
+        self,
+        _: TarpcContext,
+        _: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError> {
+        unreachable!("fixture recording does not access AULA settings")
+    }
+
+    async fn set_aula_settings(
+        self,
+        _: TarpcContext,
+        _route: DeviceRoute,
+        _: openhid_core::hid::aula::AulaChange,
+        _: openhid_core::hid::aula::LightingMode,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError> {
+        unreachable!("fixture recording does not access AULA settings")
+    }
+
+    async fn set_aula_lighting(
+        self,
+        _: TarpcContext,
+        _: DeviceRoute,
+        _: openhid_core::hid::aula::LightingChange,
+        _: openhid_core::hid::aula::LightingMode,
+    ) -> Result<openhid_core::hid::aula::LightingState, WriteError> {
+        unreachable!("profile capture must never write AULA configuration")
+    }
+
     async fn protocol_version(self, _: TarpcContext) -> u32 {
         PROTOCOL_VERSION
     }
