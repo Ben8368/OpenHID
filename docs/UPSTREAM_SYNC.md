@@ -59,22 +59,22 @@ for upstream #1924.
 
 | Upstream change | Decision and OpenHID adaptation |
 | --- | --- |
-| #1933, #1935, #1937, #1938, #1939, #1940, #1941, #1944, #1945, #1947 | Ported protocol fidelity and device-state fixes. #1937 adds the effective-maximum owner guard. #1944 updates desktop settings reads when ratchet reports arrive. #1938 reads legacy battery capability before mapping levels. |
-| #1936 | Already ported in OpenHID PR #36; no duplicate changes. |
-| #1919 | Already implemented locally: agent relaunches after Input Monitoring is granted. |
-| #1920 | Skipped: OpenHID uses its own host-link and device-ordering model; the upstream workaround does not map to the local ordering contract. |
-| #1943 | Already covered locally: DPI writes wait for device confirmation before persisting. |
-| #1880 | Already handled by OpenHID's pointer-tab capability policy, including software scroll inversion. |
-| #1946 | Deferred: applying reports from other clients requires reconciling device session ownership, capture restoration, and inventory revision semantics. The upstream patch does not apply cleanly to these boundaries. |
-| #1942 | Deferred: haptic ownership spans the Actions Ring worker, device session lifecycle, and serialized HID operations. The upstream session-restore patch does not map cleanly onto OpenHID's worker/operation ownership and needs a dedicated lifecycle design. |
-| #1907 | Skipped for this sync: `[apps]` aliases add a new config/UI feature and need a separate migration and cross-platform UX review. |
-| #1918, #1929 | Skipped: virtual HID keyboard typing and its signing profile are upstream-specific macOS input architecture and packaging changes. OpenHID's injection contract needs a separate macOS permission/signing review. |
-| #1921, #1928 | Skipped: desktop switching is a new platform-specific gesture feature, not a protocol fix; it needs a standalone input/injection design and native verification. |
-| #1926 | Skipped: Secure Input status requires a separate macOS permission UI and localization review. |
-| #1922, #1932, #1934 | Skipped: pointer speed, precision mode, and DPI LED add a coordinated device/config/UI feature set; keep them for a separate product change. |
-| #1877 | Skipped: OpenHID tracks its current stable floor by its own release/toolchain policy; no need to raise it in this sync. |
-| #1925, #1831 | Skipped: upstream Sparkle delta releases and release metadata are not part of OpenHID's release system. |
-| `7310a112`, `cd8ed411`, `5ca7a754`, `15a43a1c`, `b83454ad` | Skipped: README badge ordering and language-switcher changes are project-specific. |
+| [#1933](https://github.com/AprilNEA/OpenLogi/pull/1933), [#1935](https://github.com/AprilNEA/OpenLogi/pull/1935), [#1937](https://github.com/AprilNEA/OpenLogi/pull/1937), [#1938](https://github.com/AprilNEA/OpenLogi/pull/1938), [#1939](https://github.com/AprilNEA/OpenLogi/pull/1939), [#1940](https://github.com/AprilNEA/OpenLogi/pull/1940), [#1941](https://github.com/AprilNEA/OpenLogi/pull/1941), [#1944](https://github.com/AprilNEA/OpenLogi/pull/1944), [#1945](https://github.com/AprilNEA/OpenLogi/pull/1945), [#1947](https://github.com/AprilNEA/OpenLogi/pull/1947) | Ported protocol fidelity and device-state fixes. #1937 adds the effective-maximum owner guard. #1944 updates desktop settings reads when ratchet reports arrive. #1938 reads legacy battery capability before mapping levels. |
+| [#1936](https://github.com/AprilNEA/OpenLogi/pull/1936) | Already ported in [OpenHID PR #36](https://github.com/Ben8368/OpenHID/pull/36); no duplicate changes. |
+| [#1919](https://github.com/AprilNEA/OpenLogi/pull/1919) | Already implemented locally: agent relaunches after Input Monitoring is granted. |
+| [#1920](https://github.com/AprilNEA/OpenLogi/pull/1920) | Skipped: OpenHID uses its own host-link and device-ordering model; the upstream workaround does not map to the local ordering contract. |
+| [#1943](https://github.com/AprilNEA/OpenLogi/pull/1943) | Already covered locally: DPI writes wait for device confirmation before persisting. |
+| [#1880](https://github.com/AprilNEA/OpenLogi/pull/1880) | Already handled by OpenHID's pointer-tab capability policy, including software scroll inversion. |
+| [#1946](https://github.com/AprilNEA/OpenLogi/pull/1946) | Deferred: applying reports from other clients requires reconciling device session ownership, capture restoration, and inventory revision semantics. The upstream patch does not apply cleanly to these boundaries. |
+| [#1942](https://github.com/AprilNEA/OpenLogi/pull/1942) | Deferred: haptic ownership spans the Actions Ring worker, device session lifecycle, and serialized HID operations. The upstream session-restore patch does not map cleanly onto OpenHID's worker/operation ownership and needs a dedicated lifecycle design. |
+| [#1907](https://github.com/AprilNEA/OpenLogi/pull/1907) | Skipped for this sync: `[apps]` aliases add a new config/UI feature and need a separate migration and cross-platform UX review. |
+| [#1918](https://github.com/AprilNEA/OpenLogi/pull/1918), [#1929](https://github.com/AprilNEA/OpenLogi/pull/1929) | Skipped: virtual HID keyboard typing and its signing profile are upstream-specific macOS input architecture and packaging changes. OpenHID's injection contract needs a separate macOS permission/signing review. |
+| [#1921](https://github.com/AprilNEA/OpenLogi/pull/1921), [#1928](https://github.com/AprilNEA/OpenLogi/pull/1928) | Skipped: desktop switching is a new platform-specific gesture feature, not a protocol fix; it needs a standalone input/injection design and native verification. |
+| [#1926](https://github.com/AprilNEA/OpenLogi/pull/1926) | Skipped: Secure Input status requires a separate macOS permission UI and localization review. |
+| [#1922](https://github.com/AprilNEA/OpenLogi/pull/1922), [#1932](https://github.com/AprilNEA/OpenLogi/pull/1932), [#1934](https://github.com/AprilNEA/OpenLogi/pull/1934) | Skipped: pointer speed, precision mode, and DPI LED add a coordinated device/config/UI feature set; keep them for a separate product change. |
+| [#1877](https://github.com/AprilNEA/OpenLogi/pull/1877) | Skipped: OpenHID tracks its current stable floor by its own release/toolchain policy; no need to raise it in this sync. |
+| [#1925](https://github.com/AprilNEA/OpenLogi/pull/1925), [#1831](https://github.com/AprilNEA/OpenLogi/pull/1831) | Skipped: upstream Sparkle delta releases and release metadata are not part of OpenHID's release system. |
+| [`7310a112`](https://github.com/AprilNEA/OpenLogi/commit/7310a112), [`cd8ed411`](https://github.com/AprilNEA/OpenLogi/commit/cd8ed411), [`5ca7a754`](https://github.com/AprilNEA/OpenLogi/commit/5ca7a754), [`15a43a1c`](https://github.com/AprilNEA/OpenLogi/commit/15a43a1c), [`b83454ad`](https://github.com/AprilNEA/OpenLogi/commit/b83454ad) | Skipped: README badge ordering and language-switcher changes are project-specific. |
 
 The reviewed checkpoint for this batch is [`d2e66e7d`](https://github.com/AprilNEA/OpenLogi/commit/d2e66e7d). Deferred items remain listed above for focused follow-up work.
 
@@ -95,8 +95,8 @@ no upstream commit objects or release history were imported.
 - `cargo xtask ci wasm ast-grep`: both jobs passed. The new illumination guard
   rejected a temporary prohibited copy and accepted unrelated code.
 
-This is focused Windows verification, not the full workspace gate. Hardware behavior
-and native macOS/Linux paths were not exercised.
+The final workspace gate passed on Windows. Hardware behavior and native
+macOS/Linux paths were not exercised.
 
 ## Reviewed through 2026-10-20
 
