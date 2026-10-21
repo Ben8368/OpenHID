@@ -27,6 +27,42 @@ update feeds. IPC methods and serialized variants keep OpenHID's existing order;
 upstream indices are not OpenHID's indices. The original import base remains
 recorded in [PROVENANCE.md](PROVENANCE.md).
 
+## Current queue (2026-10-21)
+
+The fetched tip is [`0cbef3a5`](https://github.com/AprilNEA/OpenLogi/commit/0cbef3a5925a629eec44c8f773426b007b2c6c9a),
+34 commits beyond the reviewed checkpoint below. The reviewed checkpoint stays
+unchanged until each change has been compared with OpenHID and given a port or
+skip decision. Work in this order:
+
+1. **Protocol safety and data fidelity:** review upstream #1933 (preserve
+   unmodelled backlight bits), #1936 (safe 0x8070 zone writes), #1937
+   (illumination maximum), #1939 (0x2111 torque bounds), #1945 (raw firmware
+   bytes), and #1941 (versioned battery status bytes). Then assess #1935
+   (thumb-wheel reporting), #1940 (disabled-key reports), #1946 (publish
+   0x1b04 reporting changes made by other clients), #1944 (short movements and
+   SmartShift), #1947 (DPI calibration broadcasts), and #1942
+   (haptic restoration). These device and HID++ boundaries should be reviewed
+   before UI behavior that depends on their state.
+2. **Permission and input lifecycle:** review #1919 (restart after Input
+   Monitoring is granted), #1918 (virtual HID keyboard), #1926 (Secure Input
+   status), #1929 (macOS agent signing), #1920 (linked-device host switching),
+   and #1921 (desktop switching, with its regression coverage in #1928). Keep
+   the macOS permission and signing rules in force for any port.
+3. **Dependent UI features:** review #1943 (save DPI only after confirmation),
+   then #1922, #1932, #1934, and #1880 (pointer speed, precision mode, DPI LED,
+   and pointer-tab visibility). Review #1907 (per-app profile aliases) as a
+   separate config and UI change.
+4. **Toolchain alignment:** assess #1877's Rust 1.99 floor against OpenHID's
+   current stable/MSRV policy before changing the toolchain files.
+5. **Upstream-only maintenance:** do not import the upstream Sparkle delta
+   release work in #1925 or upstream release #1831. Review README badge edits
+   only if OpenHID chooses to change its own project pages.
+
+The upstream webpki advisory fix in #1924 is already covered locally by
+OpenHID commit `64aaa23f` (`build(deps): patch the webpki roots past
+RUSTSEC-2026-0381`). This is a local adaptation, not a reason to move the
+reviewed checkpoint past the other pending changes.
+
 ## Reviewed through 2026-10-20
 
 Last reviewed upstream commit:
