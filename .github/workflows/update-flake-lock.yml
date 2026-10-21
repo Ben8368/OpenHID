@@ -25,7 +25,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install upstream Nix
-        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
       # An automation token makes the generated PR trigger validation workflows.
       - name: Update flake.lock and open a PR
         uses: DeterminateSystems/update-flake-lock@da03c0f078bc4b2c37ee4f7e072d34bf8f188bb3 # v29
