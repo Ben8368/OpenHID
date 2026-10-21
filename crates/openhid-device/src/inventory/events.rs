@@ -33,11 +33,13 @@ use hidpp::feature::backlight::{
 };
 use hidpp::feature::battery_status::BatteryStatusFeature;
 use hidpp::feature::battery_voltage::BatteryVoltageFeature;
+use hidpp::feature::disable_keys::DisableKeysFeature;
 use hidpp::feature::extended_dpi::ExtendedDpiFeature;
 use hidpp::feature::extended_report_rate::ExtendedReportRateFeature;
 use hidpp::feature::fn_inversion::{
     FnInversionMultiHostFeature, FnInversionWithDefaultStateFeature,
 };
+use hidpp::feature::hires_wheel::{self, HiResWheelEvent};
 use hidpp::feature::lock_key_state::{LockKeyStateFeature, LockKeys};
 use hidpp::feature::multi_platform::PlatformChange;
 use hidpp::feature::unified_battery::BatteryEvent;
@@ -76,12 +78,17 @@ pub enum HidppEventSource {
     /// Fn lock changing on the device, as Fn+Esc does.
     FnInversion,
     /// A mouse's `ExtendedAdjustableDpi` (`0x2202`) feature reported its
-    /// sensor DPI changing on the device, as a DPI button does.
+    /// sensor DPI changing on the device, as a DPI button does, or a sensor
+    /// calibration finishing.
     ExtendedDpi,
     /// A keyboard's `MultiPlatform` (`0x4531`) feature reported its key
     /// layout platform changing on the device, as a platform key combination
     /// does.
     MultiPlatform,
+    /// A keyboard's `DisableKeys` (`0x4521`) feature reported its disabled-key
+    /// set changing without a request from this host, as software on another
+    /// host does.
+    DisableKeys,
     /// A mouse's `ExtendedAdjustableReportRate` (`0x8061`) feature reported
     /// its report rate changing on the device.
     ExtendedReportRate,
@@ -89,6 +96,8 @@ pub enum HidppEventSource {
     /// changing on the device — the backlight keys, the ambient-light
     /// sensor, or the battery.
     Backlight,
+    /// A wheel switched between ratchet and free-spin on the device.
+    HiResWheelRatchet,
 }
 
 impl HidppEventSource {
@@ -100,8 +109,10 @@ impl HidppEventSource {
             Self::FnInversion
                 | Self::ExtendedDpi
                 | Self::MultiPlatform
+                | Self::DisableKeys
                 | Self::ExtendedReportRate
                 | Self::Backlight
+                | Self::HiResWheelRatchet
         )
     }
 }
@@ -335,9 +346,9 @@ pub(crate) fn observed_event_channel() -> (EventNotifier, EventReceiver, EventOb
 /// measurement — broadcasts its changes, so each has an index here. So do the
 /// settings a user can change on the device itself: Fn lock (`0x40a2`,
 /// `0x40a3`), extended DPI (`0x2202`), the keyboard platform (`0x4531`), the
-/// extended report rate (`0x8061`) and the keyboard backlight (`0x1982`).
-/// So do the keyboard's lock keys (`0x4220`), for the on-screen indicator
-/// only.
+/// keyboard's disabled keys (`0x4521`), the extended report rate (`0x8061`)
+/// the keyboard backlight (`0x1982`) and the wheel's ratchet (`0x2121`). So do
+/// the keyboard's lock keys (`0x4220`), for the on-screen indicator only.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct EventFeatureIndices {
     pub(super) wireless_status: Option<u8>,
@@ -349,9 +360,11 @@ pub(super) struct EventFeatureIndices {
     pub(super) fn_inversion_multi_host: Option<u8>,
     pub(super) extended_dpi: Option<u8>,
     pub(super) multi_platform: Option<u8>,
+    pub(super) disable_keys: Option<u8>,
     pub(super) extended_report_rate: Option<u8>,
     pub(super) backlight: Option<u8>,
     pub(super) lock_key_state: Option<u8>,
+    pub(super) hires_wheel: Option<u8>,
 }
 
 impl EventFeatureIndices {
@@ -371,9 +384,11 @@ impl EventFeatureIndices {
                 0x40a3 => indices.fn_inversion_multi_host = Some(index),
                 0x2202 => indices.extended_dpi = Some(index),
                 0x4531 => indices.multi_platform = Some(index),
+                0x4521 => indices.disable_keys = Some(index),
                 0x8061 => indices.extended_report_rate = Some(index),
                 0x1982 => indices.backlight = Some(index),
                 0x4220 => indices.lock_key_state = Some(index),
+                0x2121 => indices.hires_wheel = Some(index),
                 _ => {}
             }
         }
@@ -427,7 +442,8 @@ impl EventFeatureIndices {
             return Some(HidppEventSource::FnInversion);
         }
         if self.extended_dpi == Some(header.feature_index)
-            && ExtendedDpiFeature::is_parameters_broadcast(function_id)
+            && (ExtendedDpiFeature::is_parameters_broadcast(function_id)
+                || ExtendedDpiFeature::is_calibration_broadcast(function_id))
         {
             return Some(HidppEventSource::ExtendedDpi);
         }
@@ -438,6 +454,14 @@ impl EventFeatureIndices {
         {
             return Some(HidppEventSource::MultiPlatform);
         }
+        // Only the report's function is trusted. Options+ reads byte 0 as the
+        // new mask, but that layout is unconfirmed, so the report only says
+        // a re-read is due.
+        if self.disable_keys == Some(header.feature_index)
+            && DisableKeysFeature::is_state_broadcast(function_id)
+        {
+            return Some(HidppEventSource::DisableKeys);
+        }
         if self.extended_report_rate == Some(header.feature_index)
             && ExtendedReportRateFeature::is_rate_broadcast(function_id)
         {
@@ -447,6 +471,15 @@ impl EventFeatureIndices {
             && BacklightFeature::is_info_broadcast(function_id)
         {
             return Some(HidppEventSource::Backlight);
+        }
+        // Ratchet reports are setting changes; wheel movement reports are input.
+        if self.hires_wheel == Some(header.feature_index)
+            && matches!(
+                hires_wheel::decode_event(message, header.device_index, header.feature_index),
+                Some(HiResWheelEvent::RatchetSwitch(_))
+            )
+        {
+            return Some(HidppEventSource::HiResWheelRatchet);
         }
         None
     }
@@ -828,9 +861,11 @@ mod tests {
                 fn_inversion_multi_host: None,
                 extended_dpi: None,
                 multi_platform: None,
+                disable_keys: None,
                 extended_report_rate: None,
                 backlight: None,
                 lock_key_state: None,
+                hires_wheel: None,
             }
         );
     }
@@ -874,9 +909,11 @@ mod tests {
                 fn_inversion_multi_host: None,
                 extended_dpi: None,
                 multi_platform: None,
+                disable_keys: None,
                 extended_report_rate: None,
                 backlight: None,
                 lock_key_state: None,
+                hires_wheel: None,
             },
         });
         state.receiver_snapshot_depth.store(1, Ordering::Release);
@@ -916,9 +953,11 @@ mod tests {
                 fn_inversion_multi_host: None,
                 extended_dpi: None,
                 multi_platform: None,
+                disable_keys: None,
                 extended_report_rate: None,
                 backlight: None,
                 lock_key_state: None,
+                hires_wheel: None,
             },
         });
 
@@ -987,9 +1026,11 @@ mod tests {
                 fn_inversion_multi_host: None,
                 extended_dpi: None,
                 multi_platform: None,
+                disable_keys: None,
                 extended_report_rate: None,
                 backlight: None,
                 lock_key_state: None,
+                hires_wheel: None,
             },
         });
         let event = |function_id: u8, software_id: u8, bytes: [u8; 3]| {
@@ -1178,13 +1219,17 @@ mod tests {
         .into();
         assert_eq!(state.decode(short, false), None);
         assert_eq!(handle.settings_revision(1), 2);
-        // 0x2202: the parameters broadcast, not a calibration result.
-        assert_eq!(
-            state.decode(long(1, 6, 0, 0), false),
-            Some(HidppEventSource::ExtendedDpi)
-        );
-        assert_eq!(state.decode(long(1, 6, 1, 0), false), None);
-        assert_eq!(handle.settings_revision(1), 3);
+        // 0x2202: parameters and calibration broadcasts both trigger a
+        // settings re-read; other functions and our own calibration reply do not.
+        for (function_id, revision) in [(0, 3), (1, 4)] {
+            assert_eq!(
+                state.decode(long(1, 6, function_id, 0), false),
+                Some(HidppEventSource::ExtendedDpi)
+            );
+            assert_eq!(handle.settings_revision(1), revision);
+        }
+        assert_eq!(state.decode(long(1, 6, 2, 0), false), None);
+        assert_eq!(state.decode(long(1, 6, 1, 0xd), false), None);
 
         // Our own traffic is not a device-side change: a matched reply, or a
         // message carrying a software id.
@@ -1195,16 +1240,63 @@ mod tests {
             state.decode(long(1, 7, 0, 0), false),
             Some(HidppEventSource::BatteryStatus)
         );
-        assert_eq!(handle.settings_revision(1), 3);
+        assert_eq!(handle.settings_revision(1), 4);
 
         // A re-probe re-registers the device; the change it already made
         // stands.
         handle.register_device(1, features);
-        assert_eq!(handle.settings_revision(1), 3);
+        assert_eq!(handle.settings_revision(1), 4);
         // The revision is per device index, and an unknown index has none.
         assert_eq!(handle.settings_revision(2), 0);
         assert_eq!(state.decode(long(3, 5, 0, 0), false), None);
         assert_eq!(handle.settings_revision(3), 0);
+    }
+
+    #[test]
+    fn a_wheel_ratchet_switch_bumps_the_revision_for_smartshift() {
+        let mouse = EventFeatureIndices::from_feature_ids(&[0x0001, 0x0003, 0x2121]);
+        assert_eq!(mouse.hires_wheel, Some(3));
+        let state = state(Some(ReceiverProtocol::Bolt));
+        let handle = EventSubscriptionHandle {
+            state: Arc::clone(&state),
+        };
+        handle.register_device(1, mouse);
+        let header = |function_id: u8, software_id: u8| v20::MessageHeader {
+            device_index: 1,
+            feature_index: 3,
+            function_id: U4::from_lo(function_id),
+            software_id: U4::from_lo(software_id),
+        };
+        let mut ratchet_payload = [0; 16];
+        ratchet_payload[0] = 1;
+        let ratchet = v20::Message::Long(header(1, 0), ratchet_payload).into();
+        let freespin = v20::Message::Short(header(1, 0), [0, 0, 0]).into();
+
+        assert_eq!(
+            state.decode(freespin, false),
+            Some(HidppEventSource::HiResWheelRatchet)
+        );
+        assert_eq!(
+            state.decode(ratchet, false),
+            Some(HidppEventSource::HiResWheelRatchet)
+        );
+        assert_eq!(handle.settings_revision(1), 2);
+
+        let mut movement = [0; 16];
+        movement[..3].copy_from_slice(&[1, 0xff, 0xff]);
+        assert_eq!(
+            state.decode(v20::Message::Long(header(0, 0), movement).into(), false),
+            None
+        );
+        assert_eq!(state.decode(ratchet, true), None);
+        assert_eq!(
+            state.decode(
+                v20::Message::Long(header(1, 0xd), ratchet_payload).into(),
+                false
+            ),
+            None
+        );
+        assert_eq!(handle.settings_revision(1), 2);
     }
 
     #[test]
@@ -1242,6 +1334,90 @@ mod tests {
         assert_eq!(state.decode(report(2, 0), true), None);
         assert_eq!(state.decode(report(2, 0xd), false), None);
         assert_eq!(handle.settings_revision(1), 2);
+    }
+
+    #[test]
+    fn disabled_key_reports_are_change_hints_that_bump_the_revision() {
+        let keyboard = EventFeatureIndices::from_feature_ids(&[0x0001, 0x0003, 0x4531, 0x4521]);
+        assert_eq!(keyboard.disable_keys, Some(4));
+        assert_eq!(keyboard.multi_platform, Some(3));
+
+        let state = state(Some(ReceiverProtocol::Bolt));
+        let handle = EventSubscriptionHandle {
+            state: Arc::clone(&state),
+        };
+        handle.register_device(1, keyboard);
+        let report = |function_id: u8, software_id: u8, payload: [u8; 3]| {
+            v20::Message::Short(
+                v20::MessageHeader {
+                    device_index: 1,
+                    feature_index: 4,
+                    function_id: U4::from_lo(function_id),
+                    software_id: U4::from_lo(software_id),
+                },
+                payload,
+            )
+            .into()
+        };
+
+        // Options+ takes an unsolicited function-2 report as a change. Its
+        // bytes are unconfirmed, so none of them decides anything: an empty
+        // mask, a known one and unknown bits are all the same hint.
+        for (payload, revision) in [
+            ([0x00, 0x00, 0x00], 1),
+            ([0x11, 0x00, 0x00], 2),
+            ([0xe0, 0xff, 0xff], 3),
+        ] {
+            assert_eq!(
+                state.decode(report(2, 0, payload), false),
+                Some(HidppEventSource::DisableKeys),
+                "{payload:02x?}"
+            );
+            assert_eq!(handle.settings_revision(1), revision);
+        }
+        // A long report is the same hint.
+        let long = v20::Message::Long(
+            v20::MessageHeader {
+                device_index: 1,
+                feature_index: 4,
+                function_id: U4::from_lo(2),
+                software_id: U4::from_lo(0),
+            },
+            [0x01; 16],
+        )
+        .into();
+        assert_eq!(
+            state.decode(long, false),
+            Some(HidppEventSource::DisableKeys)
+        );
+        assert_eq!(handle.settings_revision(1), 4);
+
+        // Only function 2 is the change: not the capability and mask reads
+        // (functions 0 and 1), and not a function the feature does not have.
+        for function_id in [0, 1, 3] {
+            assert_eq!(
+                state.decode(report(function_id, 0, [0x01, 0, 0]), false),
+                None,
+                "function {function_id}"
+            );
+        }
+        // Our own write's reply is not a change made elsewhere: it is matched
+        // to its request, and it carries our software id.
+        assert_eq!(state.decode(report(2, 0, [0x01, 0, 0]), true), None);
+        assert_eq!(state.decode(report(2, 0xd, [0x01, 0, 0]), false), None);
+        // A feature index the table does not hold is not this feature.
+        let unknown_index = v20::Message::Short(
+            v20::MessageHeader {
+                device_index: 1,
+                feature_index: 5,
+                function_id: U4::from_lo(2),
+                software_id: U4::from_lo(0),
+            },
+            [0x01, 0, 0],
+        )
+        .into();
+        assert_eq!(state.decode(unknown_index, false), None);
+        assert_eq!(handle.settings_revision(1), 4);
     }
 
     #[test]

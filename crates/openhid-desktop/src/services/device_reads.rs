@@ -888,14 +888,19 @@ impl DeviceReads {
 
     /// Re-read `key`'s settings after the device reported changing one
     /// itself, keeping the shown values while it answers. Covers the settings
-    /// such a report can concern — DPI, Fn lock, report rate and backlight (see
-    /// [`PairedDevice::settings_revision`]); a read nothing subscribed to
-    /// stays unsubscribed.
+    /// such a report can concern — DPI, Fn lock, report rate, backlight and
+    /// SmartShift wheel mode (see [`PairedDevice::settings_revision`]); a read
+    /// nothing subscribed to stays unsubscribed.
     ///
     /// [`PairedDevice::settings_revision`]: openhid_core::device::PairedDevice::settings_revision
     pub(crate) fn revalidate_device_settings(&mut self, key: &DeviceKey) {
         if let Some(read) = self.dpi.get_mut(key) {
             read.query.revalidate();
+        }
+        if self.smartshift.contains_key(key)
+            && let Some(client) = &self.client
+        {
+            client.invalidate(query_key(SMARTSHIFT, key));
         }
         self.refresh_fn_lock(key);
         if let Some(read) = self.report_rate.get_mut(key) {

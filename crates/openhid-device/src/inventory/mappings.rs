@@ -226,19 +226,19 @@ pub(crate) fn voltage_battery_percentage(voltage_mv: u16) -> u8 {
 pub(crate) fn legacy_battery_info(
     discharge_level: u8,
     status: HidppLegacyBatteryStatus,
+    mileage: bool,
 ) -> BatteryInfo {
+    let level_of = if mileage {
+        legacy_battery_level_from_percentage
+    } else {
+        coarse_legacy_battery_level
+    };
     let status = map_legacy_battery_status(status);
     let (percentage, level) = match status {
         BatteryStatus::Full => (Some(100), BatteryLevel::Full),
-        BatteryStatus::Discharging => (
-            Some(discharge_level),
-            legacy_battery_level_from_percentage(discharge_level),
-        ),
+        BatteryStatus::Discharging => (Some(discharge_level), level_of(discharge_level)),
         _ if discharge_level == 0 => (None, BatteryLevel::Unknown),
-        _ => (
-            Some(discharge_level),
-            legacy_battery_level_from_percentage(discharge_level),
-        ),
+        _ => (Some(discharge_level), level_of(discharge_level)),
     };
     BatteryInfo {
         freshness: openhid_core::device::BatteryFreshness::Current,
@@ -252,8 +252,8 @@ pub(crate) fn legacy_battery_info(
 /// `0x1000` feature reports a percentage but, unlike `0x1004`, no level bitmask,
 /// so the bucket is ours to pick.
 ///
-/// ponytail: fixed display buckets, not device thresholds. Lift to the device's
-/// own thresholds only if `0x1000`'s capability query (function 1) is wired up.
+/// Fixed display buckets for mileage readings and voltage estimates. A legacy
+/// `0x1000` device without mileage uses [`coarse_legacy_battery_level`].
 pub(crate) fn legacy_battery_level_from_percentage(percentage: u8) -> BatteryLevel {
     match percentage {
         90..=u8::MAX => BatteryLevel::Full,
@@ -263,12 +263,25 @@ pub(crate) fn legacy_battery_level_from_percentage(percentage: u8) -> BatteryLev
     }
 }
 
+/// Map the four coarse legacy battery levels encoded as percentages when
+/// `0x1000` does not advertise mileage. The Linux HID++ driver treats 30 as
+/// good, following Logitech's Windows indicator.
+pub(crate) fn coarse_legacy_battery_level(discharge_level: u8) -> BatteryLevel {
+    match discharge_level {
+        0..=10 => BatteryLevel::Critical,
+        11..=29 => BatteryLevel::Low,
+        30..=80 => BatteryLevel::Good,
+        81..=u8::MAX => BatteryLevel::Full,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        BatteryLevel, BatteryStatus, DeviceKind, HidppVoltageChargingStatus, UnifyingDeviceKind,
-        legacy_battery_level_from_percentage, map_unifying_kind, map_voltage_battery_status,
-        resolve_device_kind, voltage_battery_percentage,
+        BatteryLevel, BatteryStatus, DeviceKind, HidppLegacyBatteryStatus,
+        HidppVoltageChargingStatus, UnifyingDeviceKind, coarse_legacy_battery_level,
+        legacy_battery_info, legacy_battery_level_from_percentage, map_unifying_kind,
+        map_voltage_battery_status, resolve_device_kind, voltage_battery_percentage,
     };
 
     #[test]
@@ -329,6 +342,31 @@ mod tests {
             legacy_battery_level_from_percentage(0),
             BatteryLevel::Critical
         );
+    }
+
+    #[test]
+    fn coarse_legacy_levels_follow_the_four_level_ranges() {
+        for (level, expected) in [
+            (0, BatteryLevel::Critical),
+            (10, BatteryLevel::Critical),
+            (11, BatteryLevel::Low),
+            (29, BatteryLevel::Low),
+            (30, BatteryLevel::Good),
+            (80, BatteryLevel::Good),
+            (81, BatteryLevel::Full),
+            (100, BatteryLevel::Full),
+        ] {
+            assert_eq!(coarse_legacy_battery_level(level), expected, "{level}");
+        }
+    }
+
+    #[test]
+    fn legacy_mileage_selects_the_battery_level_mapping() {
+        let coarse = legacy_battery_info(85, HidppLegacyBatteryStatus::Discharging, false);
+        let mileage = legacy_battery_info(85, HidppLegacyBatteryStatus::Discharging, true);
+        assert_eq!(coarse.level, BatteryLevel::Full);
+        assert_eq!(mileage.level, BatteryLevel::Good);
+        assert_eq!(coarse.percentage, mileage.percentage);
     }
 
     #[test]

@@ -9,7 +9,7 @@ use hidpp::{
         adc_measurement::{AdcMeasurement, AdcMeasurementFeature},
         battery_status::BatteryStatusFeature,
         battery_voltage::BatteryVoltageFeature,
-        device_information::{DeviceInformationFeature, DeviceTransport},
+        device_information::{DeviceInformation, DeviceInformationFeature, DeviceTransport},
         device_type_and_name::DeviceTypeAndNameFeature,
         gestures2::Gestures2Feature,
         multi_platform::{MultiPlatformCapabilities, MultiPlatformFeature},
@@ -97,7 +97,12 @@ pub(super) enum BatteryProbe {
         index: u8,
         state_of_charge: bool,
     },
-    Legacy(u8),
+    /// `0x1000` at `index`; `mileage` distinguishes gauge readings from the
+    /// four coarse discharge levels used by devices without mileage support.
+    Legacy {
+        index: u8,
+        mileage: bool,
+    },
     Voltage(u8),
     Adc(u8),
 }
@@ -128,13 +133,13 @@ pub(super) async fn read_battery(
                     status: map_battery_status(info.status),
                 })
         }
-        BatteryProbe::Legacy(feature_index) => {
-            let feature = BatteryStatusFeature::new(Arc::clone(channel), slot, feature_index);
+        BatteryProbe::Legacy { index, mileage } => {
+            let feature = BatteryStatusFeature::new(Arc::clone(channel), slot, index);
             feature
                 .get_battery_level_status()
                 .await
                 .ok()
-                .map(|info| legacy_battery_info(info.discharge_level, info.status))
+                .map(|info| legacy_battery_info(info.discharge_level, info.status, mileage))
         }
         BatteryProbe::Voltage(feature_index) => {
             let feature = BatteryVoltageFeature::new(Arc::clone(channel), slot, feature_index);
@@ -202,7 +207,10 @@ pub(super) fn battery_feature_index(ids: impl IntoIterator<Item = u16>) -> Optio
             });
         }
         if id == BatteryStatusFeature::ID && legacy.is_none() {
-            legacy = Some(BatteryProbe::Legacy(index));
+            legacy = Some(BatteryProbe::Legacy {
+                index,
+                mileage: true,
+            });
         }
         if id == BatteryVoltageFeature::ID && voltage.is_none() {
             voltage = Some(BatteryProbe::Voltage(index));
@@ -302,45 +310,10 @@ pub(super) async fn probe_features(
 
     let (battery_probe, state_of_charge_unknown) =
         resolve_state_of_charge(channel, slot, battery_probe).await;
-    capabilities_incomplete |= state_of_charge_unknown;
-    let mut identity_incomplete = false;
-    let model_info = match device.get_feature::<DeviceInformationFeature>() {
-        Some(feature) => match feature.get_device_info().await {
-            Ok(info) => {
-                let serial_number = if info.capabilities.serial_number {
-                    match feature.get_serial_number().await {
-                        Ok(serial) => normalize_serial_number(&serial),
-                        Err(e) => {
-                            debug!(slot, error = ?e, "DeviceInformation serial read failed");
-                            identity_incomplete = true;
-                            None
-                        }
-                    }
-                } else {
-                    None
-                };
-                Some(DeviceModelInfo {
-                    entity_count: info.entity_count,
-                    serial_number,
-                    unit_id: info.unit_id,
-                    transports: DeviceTransports {
-                        usb: info.transport.contains(DeviceTransport::USB),
-                        equad: info.transport.contains(DeviceTransport::E_QUAD),
-                        btle: info.transport.contains(DeviceTransport::BTLE),
-                        bluetooth: info.transport.contains(DeviceTransport::BLUETOOTH),
-                    },
-                    model_ids: info.model_id,
-                    extended_model_id: info.extended_model_id,
-                })
-            }
-            Err(e) => {
-                debug!(slot, error = ?e, "DeviceInformation read failed");
-                identity_incomplete = true;
-                None
-            }
-        },
-        None => None,
-    };
+    let (battery_probe, mileage_unknown) =
+        resolve_legacy_mileage(channel, slot, battery_probe).await;
+    capabilities_incomplete |= state_of_charge_unknown || mileage_unknown;
+    let (model_info, identity_incomplete) = read_device_model_info(&device, slot).await;
 
     // `0x0005` reports the device's own marketing type and name. The type is
     // the authoritative kind signal; the marketing name matters especially on
@@ -361,6 +334,48 @@ pub(super) async fn probe_features(
         battery_probe,
         event_features,
     )
+}
+
+async fn read_device_model_info(device: &Device, slot: u8) -> (Option<DeviceModelInfo>, bool) {
+    let Some(feature) = device.get_feature::<DeviceInformationFeature>() else {
+        return (None, false);
+    };
+    match feature.get_device_info().await {
+        Ok(info) => {
+            let serial_number = if info.capabilities.serial_number {
+                match feature.get_serial_number().await {
+                    Ok(serial) => normalize_serial_number(&serial),
+                    Err(e) => {
+                        debug!(slot, error = ?e, "DeviceInformation serial read failed");
+                        return (Some(model_info(info, None)), true);
+                    }
+                }
+            } else {
+                None
+            };
+            (Some(model_info(info, serial_number)), false)
+        }
+        Err(e) => {
+            debug!(slot, error = ?e, "DeviceInformation read failed");
+            (None, true)
+        }
+    }
+}
+
+fn model_info(info: DeviceInformation, serial_number: Option<String>) -> DeviceModelInfo {
+    DeviceModelInfo {
+        entity_count: info.entity_count,
+        serial_number,
+        unit_id: info.unit_id,
+        transports: DeviceTransports {
+            usb: info.transport.contains(DeviceTransport::USB),
+            equad: info.transport.contains(DeviceTransport::E_QUAD),
+            btle: info.transport.contains(DeviceTransport::BTLE),
+            bluetooth: info.transport.contains(DeviceTransport::BLUETOOTH),
+        },
+        model_ids: info.model_id,
+        extended_model_id: info.extended_model_id,
+    }
 }
 
 /// Read whether a `0x1004` battery gauges its state of charge, and return the
@@ -392,6 +407,35 @@ async fn resolve_state_of_charge(
         ),
         Err(e) => {
             debug!(slot, error = ?e, "UnifiedBattery capability read failed");
+            (probe, true)
+        }
+    }
+}
+
+/// Read whether a legacy `0x1000` battery reports mileage and memoize it with
+/// the selected battery probe. A failed read preserves the assumed mileage
+/// behavior for this probe and prevents that assumption from being cached.
+async fn resolve_legacy_mileage(
+    channel: &Arc<HidppChannel>,
+    slot: u8,
+    probe: Option<BatteryProbe>,
+) -> (Option<BatteryProbe>, bool) {
+    let Some(BatteryProbe::Legacy { index, .. }) = probe else {
+        return (probe, false);
+    };
+    match BatteryStatusFeature::new(Arc::clone(channel), slot, index)
+        .get_battery_capability()
+        .await
+    {
+        Ok(capability) => (
+            Some(BatteryProbe::Legacy {
+                index,
+                mileage: capability.reports_mileage(),
+            }),
+            false,
+        ),
+        Err(error) => {
+            debug!(slot, ?error, "BatteryStatus capability read failed");
             (probe, true)
         }
     }
@@ -636,6 +680,15 @@ mod tests {
         }
     }
 
+    /// A `0x1000` source as the feature table alone describes it, before the
+    /// probe reads its capability.
+    const fn legacy(index: u8) -> BatteryProbe {
+        BatteryProbe::Legacy {
+            index,
+            mileage: true,
+        }
+    }
+
     /// `0x1004` capability flags: bit 0 rechargeable, bit 1 state of charge.
     const RECHARGEABLE: u8 = 1;
     const STATE_OF_CHARGE: u8 = 1 << 1;
@@ -722,6 +775,90 @@ mod tests {
         assert_eq!(battery.expect("a reading").percentage, Some(67));
     }
 
+    /// Probe and read a device whose only battery source is a legacy `0x1000`.
+    async fn legacy_probe(
+        capability: Option<[u8; 2]>,
+        status: [u8; 3],
+    ) -> (ProbedFeatures, Option<BatteryProbe>, Option<BatteryInfo>) {
+        let features = [0x0001, BatteryStatusFeature::ID];
+        let (raw, _) = ScriptedRawHidChannel::with_dynamic_responder(move |request| {
+            let mut response = vec![0; 20];
+            response[..4].copy_from_slice(&request[..4]);
+            response[0] = 0x11;
+            match (request[2], request[3] >> 4) {
+                (0, 1) => response[4] = 4,
+                (0, 0) => response[4] = 1,
+                (1, 0) => response[4] = u8::try_from(features.len()).unwrap(),
+                (1, 1) => response[4..6]
+                    .copy_from_slice(&features[usize::from(request[4]) - 1].to_be_bytes()),
+                (2, 1) => {
+                    let Some(capability) = capability else {
+                        return Some(feature_error(request, 0x08));
+                    };
+                    response[4..6].copy_from_slice(&capability);
+                }
+                (2, 0) => response[4..7].copy_from_slice(&status),
+                _ => panic!("unexpected request: {request:02x?}"),
+            }
+            Some(response)
+        });
+        let channel = scripted_channel(raw).await;
+        let (probe, battery_probe, _) = probe_features(&channel, 0xff, None).await;
+        let battery = match battery_probe {
+            Some(battery_probe) => match read_battery(&channel, 0xff, battery_probe).await {
+                BatteryRead::Reading(info) => Some(info),
+                _ => None,
+            },
+            None => None,
+        };
+        (probe, battery_probe, battery)
+    }
+
+    #[tokio::test]
+    async fn a_legacy_battery_without_mileage_uses_its_coarse_level() {
+        let (probe, battery_probe, battery) = legacy_probe(Some([4, 0b100]), [85, 50, 0]).await;
+        assert_eq!(
+            battery_probe,
+            Some(BatteryProbe::Legacy {
+                index: 2,
+                mileage: false,
+            })
+        );
+        assert!(!probe.capabilities_incomplete);
+        let battery = battery.expect("a reading");
+        assert_eq!(battery.percentage, Some(85));
+        assert_eq!(battery.level, BatteryLevel::Full);
+    }
+
+    #[tokio::test]
+    async fn a_legacy_mileage_flag_below_ten_levels_is_ignored() {
+        let (_, battery_probe, battery) = legacy_probe(Some([4, 0b010]), [15, 5, 0]).await;
+        assert_eq!(
+            battery_probe,
+            Some(BatteryProbe::Legacy {
+                index: 2,
+                mileage: false,
+            })
+        );
+        assert_eq!(battery.expect("a reading").level, BatteryLevel::Low);
+    }
+
+    #[tokio::test]
+    async fn a_legacy_battery_with_mileage_uses_percentage_buckets() {
+        let (probe, battery_probe, battery) = legacy_probe(Some([100, 0b110]), [85, 84, 0]).await;
+        assert_eq!(battery_probe, Some(legacy(2)));
+        assert!(!probe.capabilities_incomplete);
+        assert_eq!(battery.expect("a reading").level, BatteryLevel::Good);
+    }
+
+    #[tokio::test]
+    async fn a_failed_legacy_capability_read_uses_coarse_levels_and_reprobes() {
+        let (probe, battery_probe, battery) = legacy_probe(None, [85, 50, 0]).await;
+        assert_eq!(battery_probe, Some(legacy(2)));
+        assert!(probe.capabilities_incomplete);
+        assert_eq!(battery.expect("a reading").level, BatteryLevel::Good);
+    }
+
     #[test]
     fn battery_index_is_one_based_in_the_enumerated_table() {
         // `enumerate_features` omits the root feature (index 0), so the first
@@ -738,7 +875,7 @@ mod tests {
     #[test]
     fn legacy_battery_is_found_when_unified_is_absent() {
         let table = [0x0001, BatteryStatusFeature::ID, 0x2201];
-        assert_eq!(battery_feature_index(table), Some(BatteryProbe::Legacy(2)));
+        assert_eq!(battery_feature_index(table), Some(legacy(2)));
     }
 
     #[test]
@@ -757,7 +894,7 @@ mod tests {
     #[test]
     fn direct_percentage_sources_outrank_the_voltage_estimate() {
         let table = [BatteryVoltageFeature::ID, BatteryStatusFeature::ID];
-        assert_eq!(battery_feature_index(table), Some(BatteryProbe::Legacy(2)));
+        assert_eq!(battery_feature_index(table), Some(legacy(2)));
         let table = [BatteryVoltageFeature::ID, UnifiedBatteryFeature::ID];
         assert_eq!(battery_feature_index(table), Some(unified(2)));
     }
@@ -850,9 +987,7 @@ mod tests {
             Some(response)
         });
         let channel = scripted_channel(raw).await;
-        let BatteryRead::Reading(battery) =
-            read_battery(&channel, 0xff, BatteryProbe::Legacy(2)).await
-        else {
+        let BatteryRead::Reading(battery) = read_battery(&channel, 0xff, legacy(2)).await else {
             panic!("expected a reading");
         };
         battery
@@ -888,7 +1023,7 @@ mod tests {
     fn adc_battery_ranks_below_every_other_source() {
         for (other, expected) in [
             (UnifiedBatteryFeature::ID, unified(2)),
-            (BatteryStatusFeature::ID, BatteryProbe::Legacy(2)),
+            (BatteryStatusFeature::ID, legacy(2)),
             (BatteryVoltageFeature::ID, BatteryProbe::Voltage(2)),
         ] {
             let table = [AdcMeasurementFeature::ID, other];

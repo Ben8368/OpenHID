@@ -93,7 +93,7 @@ fn hold_percentage_while_charging(
         status: fresh.status,
     };
     match (probe, prev) {
-        (BatteryProbe::Legacy(_), Some(p))
+        (BatteryProbe::Legacy { .. }, Some(p))
             if fresh.percentage.is_none() && p.percentage.is_some_and(|p| p > 0) =>
         {
             held(p)
@@ -357,7 +357,10 @@ mod hold_tests {
 
     #[test]
     fn charging_without_a_percentage_holds_last_known_percentage() {
-        let legacy = BatteryProbe::Legacy(0);
+        let legacy = BatteryProbe::Legacy {
+            index: 0,
+            mileage: true,
+        };
         let held = hold_percentage_while_charging(
             battery(None, BatteryStatus::Charging),
             Some(&battery(Some(85), BatteryStatus::Discharging)),
@@ -506,7 +509,10 @@ mod hold_tests {
                 battery: Some(battery(Some(8), BatteryStatus::Discharging)),
                 ..ProbedFeatures::default()
             },
-            battery: Some(BatteryProbe::Legacy(1)),
+            battery: Some(BatteryProbe::Legacy {
+                index: 1,
+                mileage: true,
+            }),
             events: EventFeatureIndices::default(),
             probed_at: now,
         };
