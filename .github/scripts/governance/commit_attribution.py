@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -14,16 +15,19 @@ IDENTITIES = {
 
 
 def validate(message_file: Path) -> None:
+    message = message_file.read_text(encoding="utf-8")
     result = subprocess.run(
         ["git", "interpret-trailers", "--parse", str(message_file)],
         capture_output=True, text=True, encoding="utf-8", check=True,
     )
     ai = False
     human = False
+    parsed_coauthors: set[str] = set()
     for line in result.stdout.splitlines():
         key, _, value = line.partition(":")
         value = value.strip()
         if key.lower() == "co-authored-by":
+            parsed_coauthors.add(value)
             name, _, address = value.partition(" <")
             if name in IDENTITIES:
                 if address != IDENTITIES[name] + ">":
@@ -33,6 +37,21 @@ def validate(message_file: Path) -> None:
             if value != "true":
                 raise ValueError("Human-authored must be exactly true.")
             human = True
+
+    message_coauthors = {
+        match.group(1).strip()
+        for match in re.finditer(
+            r"^[ \t]*Co-authored-by:[ \t]*(.+?)[ \t]*$",
+            message,
+            re.IGNORECASE | re.MULTILINE,
+        )
+    }
+    if not message_coauthors.issubset(parsed_coauthors):
+        raise ValueError(
+            "Every Co-authored-by trailer must appear in the final trailer block; "
+            "verify with git interpret-trailers --parse."
+        )
+
     if ai and human:
         raise ValueError("AI attribution conflicts with Human-authored: true.")
     if not ai and not human:

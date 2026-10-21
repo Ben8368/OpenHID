@@ -5,6 +5,9 @@ use openhid_hidpp_derive::Feature;
 
 use crate::{feature::FeatureEndpoint, protocol::v20::Hidpp20Error};
 
+/// The first feature version whose `getSensorDpi` reply carries the default DPI.
+const DEFAULT_DPI_MIN_VERSION: u8 = 1;
+
 /// Implements the `AdjustableDpi` / `0x2201` feature.
 #[derive(Clone, Feature)]
 #[creatable(id = 0x2201, version = 0)]
@@ -58,6 +61,33 @@ impl AdjustableDpiFeature {
             .extend_payload();
 
         Ok(u16::from_be_bytes([payload[1], payload[2]]))
+    }
+
+    /// Retrieves the default DPI of `sensor_index`, or `None` when the device
+    /// reports none.
+    ///
+    /// The `0x2201` specification adds the default DPI in feature version 1,
+    /// after the current DPI in bytes 3 and 4 of the `getSensorDpi` reply.
+    /// Version 0 reports no default there, so this returns `None` without
+    /// sending a request regardless of the contents those bytes might hold.
+    /// From version 1 onward, a default of 0 also means the firmware reports
+    /// no default.
+    pub async fn get_sensor_default_dpi(
+        &self,
+        version: u8,
+        sensor_index: u8,
+    ) -> Result<Option<u16>, Hidpp20Error> {
+        if version < DEFAULT_DPI_MIN_VERSION {
+            return Ok(None);
+        }
+
+        let payload = self
+            .endpoint
+            .call(2, [sensor_index, 0x00, 0x00])
+            .await?
+            .extend_payload();
+        let default = u16::from_be_bytes([payload[3], payload[4]]);
+        Ok((default != 0).then_some(default))
     }
 
     /// Sets the DPI for `sensor_index`.
@@ -197,6 +227,49 @@ mod tests {
         reply[1..3].copy_from_slice(&1600u16.to_be_bytes());
         let dpi = answer(2, |dpi| async move { dpi.get_sensor_dpi(1).await }, reply);
         assert_matches!(dpi, Ok(1600));
+    }
+
+    #[test]
+    fn default_dpi_read_takes_bytes_three_and_four_from_version_one() {
+        for version in [1, 2] {
+            let mut reply = [0; 16];
+            reply[1..5].copy_from_slice(&[0x06, 0x40, 0x03, 0xe8]);
+            let dpi = answer(
+                2,
+                |dpi| async move { dpi.get_sensor_default_dpi(version, 0).await },
+                reply,
+            );
+            assert_matches!(dpi, Ok(Some(1000)), "version {version}");
+        }
+    }
+
+    #[test]
+    fn version_zero_has_no_default_dpi_and_sends_no_request() {
+        use std::sync::Arc;
+
+        use crate::channel::mock::{MockRawHidChannel, channel_with_reader};
+        use crate::feature::CreatableFeature;
+
+        futures::executor::block_on(async {
+            let (raw, handle) = MockRawHidChannel::new();
+            let channel = Arc::new(channel_with_reader(raw).await);
+            let feature = super::AdjustableDpiFeature::new(channel, 3, 8);
+
+            assert_matches!(feature.get_sensor_default_dpi(0, 0).await, Ok(None));
+            assert!(handle.written_reports().is_empty());
+        });
+    }
+
+    #[test]
+    fn a_zero_default_dpi_is_reported_as_none() {
+        let mut reply = [0; 16];
+        reply[1..3].copy_from_slice(&1600u16.to_be_bytes());
+        let dpi = answer(
+            2,
+            |dpi| async move { dpi.get_sensor_default_dpi(1, 0).await },
+            reply,
+        );
+        assert_matches!(dpi, Ok(None));
     }
 
     #[test]

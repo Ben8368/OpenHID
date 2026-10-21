@@ -1,4 +1,10 @@
 //! Events emitted by the `RgbEffects` feature (`0x8071`).
+//!
+//! Event `3` is reverse-engineered and its payload layout is unknown, so
+//! [`RgbEffectsEvent::NvEffectSync`] preserves its raw payload. Treat it as a
+//! hint to re-read the non-volatile configuration with
+//! [`RgbEffectsFeature::get_nv_config`](super::RgbEffectsFeature::get_nv_config).
+//! Events `4` and above are dropped.
 
 use super::types::{
     ActivityEventType, CLUSTER_EFFECT_PARAM_COUNT, PowerModeTarget, RgbPersistence, be16,
@@ -38,9 +44,20 @@ pub enum RgbEffectsEvent {
         /// reported a value this crate does not model.
         power_mode: Option<PowerModeTarget>,
     },
+    /// The device's stored non-volatile effect configuration may have changed
+    /// (event `3`). The payload layout is unknown; re-read the stored
+    /// configuration with [`RgbEffectsFeature::get_nv_config`](super::RgbEffectsFeature::get_nv_config)
+    /// instead of interpreting these bytes.
+    #[non_exhaustive]
+    NvEffectSync {
+        /// Unparsed event payload. A short report is zero-extended to 16 bytes,
+        /// so trailing zeroes need not have come from the device.
+        payload: [u8; 16],
+    },
 }
 
-/// Decodes an unsolicited `0x8071` event payload by its sub-id.
+/// Decodes an unsolicited `0x8071` event payload by its sub-id. Sub-ids `4`
+/// and above return `None`.
 pub(super) fn decode_event(sub_id: u8, payload: &[u8; 16]) -> Option<RgbEffectsEvent> {
     match sub_id {
         0 => Some(RgbEffectsEvent::EffectSync {
@@ -67,6 +84,7 @@ pub(super) fn decode_event(sub_id: u8, payload: &[u8; 16]) -> Option<RgbEffectsE
                 .ok(),
             })
         }
+        3 => Some(RgbEffectsEvent::NvEffectSync { payload: *payload }),
         _ => None,
     }
 }

@@ -16,9 +16,18 @@ git diff <last-reviewed-upstream-sha> upstream/master
 
 Review each upstream change against OpenHID's current implementation. Port the
 relevant change in a temporary branch/worktree, map the renamed crate paths,
-and preserve local features and the original author's credit. Run the repository
-local gate and affected boundary checks before pushing; merge after current-head
-CI and review. Delete the temporary branch after its changes reach `master`.
+and preserve local features. For source authorship, follow the single policy in
+[Review and commit attribution](REVIEW_POLICY.md#attribution): inspect each
+ported source commit's author and co-authors, put every included contributor in
+the OpenHID commit's final trailer block, and verify them with
+`git show -s --format=%B <commit> | git interpret-trailers --parse`. A source
+trailer copied into a nested commit message is not sufficient. Record only
+contributors whose work is included; deferred and already-covered changes do
+not receive trailers on the current port.
+
+Run the repository local gate and affected boundary checks before pushing; merge
+after current-head CI and review. Delete the temporary branch after its changes
+reach `master`.
 The source remote and its tracking ref may remain; they are not OpenHID branches.
 
 Do not merge unrelated upstream history, replace the full source tree, import
@@ -28,6 +37,47 @@ upstream indices are not OpenHID's indices. The original import base remains
 recorded in [PROVENANCE.md](PROVENANCE.md).
 
 ## Current queue (2026-10-21)
+
+The fetched tip is [`491c5fdd`](https://github.com/AprilNEA/OpenLogi/commit/491c5fdd),
+three commits beyond the previously reviewed checkpoint `d2e66e7d`.
+
+1. **Protocol fidelity:** ported #1952 and #1951. #1952 only reads the default
+   DPI bytes of feature `0x2201` when the device reports feature version 1 or
+   later; version 0 returns no default and sends no request. #1951 preserves
+   the unknown raw payload of `0x8071` event 3, while events 4 and above remain
+   ignored.
+2. **Pairing UX:** #1614 is deferred for a separate product and IPC review. It
+   adds an explicit receiver selector across pairing, IPC, and the add-device
+   UI; this is broader than the current protocol-fidelity sync. Its upstream
+   commit names Josh Horne as author and also carries a `hornej` co-author
+   trailer with the same email; resolve that source attribution if the feature
+   is adopted later.
+
+Both ported protocol fixes were authored by Xuan Zhang. The OpenHID sync commit
+records Xuan in the final trailer block; the governance hook and parsed-trailer
+check cover the failure found in the preceding sync.
+
+## Review disposition (checkpoint 491c5fdd)
+
+| Upstream change | Decision and OpenHID adaptation |
+| --- | --- |
+| [#1952](https://github.com/AprilNEA/OpenLogi/pull/1952) | Ported: the `0x2201` default-DPI field is valid only from feature version 1. The wrapper returns `None` without I/O for version 0. |
+| [#1951](https://github.com/AprilNEA/OpenLogi/pull/1951) | Ported: decode event 3 as `NvEffectSync` and retain its raw payload; keep event IDs 4 and above unknown. |
+| [#1614](https://github.com/AprilNEA/OpenLogi/pull/1614) | Deferred: explicit receiver selection crosses pairing policy, append-only IPC, and GUI flow; handle in a dedicated product change. |
+
+The reviewed checkpoint for this batch is [`491c5fdd`](https://github.com/AprilNEA/OpenLogi/commit/491c5fdd).
+
+## Port verification (Windows, 2026-10-21)
+
+- `cargo test -p openhid-hidpp`: 350 passed; one existing documentation example ignored.
+- `cargo clippy -p openhid-hidpp --all-targets -- -D warnings`: passed with `RUSTFLAGS=-D warnings`.
+- `cargo fmt --all -- --check` and `git diff --check`: passed.
+- `cargo xtask ci wasm`: passed for the portable crates, including `openhid-hidpp`.
+- `python -m unittest discover -s .github/scripts/governance -p 'test_*.py'`: six passed, including the nested-upstream-trailer regression.
+
+These protocol changes were not exercised on physical hardware. Receiver selection #1614 remains deferred and was not included in these checks.
+
+## Reviewed through d2e66e7d (2026-10-21)
 
 The fetched tip is [`d2e66e7d`](https://github.com/AprilNEA/OpenLogi/commit/d2e66e7d),
 35 commits beyond the reviewed checkpoint below. The disposition table below records
@@ -55,7 +105,7 @@ OpenHID commit `64aaa23f` (`build(deps): patch the webpki roots past
 RUSTSEC-2026-0381`). This local dependency patch is recorded as the disposition
 for upstream #1924.
 
-## Review disposition (2026-10-21)
+## Review disposition (checkpoint d2e66e7d)
 
 | Upstream change | Decision and OpenHID adaptation |
 | --- | --- |

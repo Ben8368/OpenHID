@@ -62,6 +62,23 @@ class AttributionTests(unittest.TestCase):
                 self.assertEqual(author.stdout.strip(), "Fixture Maintainer <maintainer@example.invalid>")
                 self.assertIn(trailer, self.git("show", "-s", "--format=%B", "HEAD").stdout)
 
+    def test_upstream_contributor_trailer_is_kept_in_final_trailer_block(self):
+        message = (
+            "fix(device): adopt upstream fix\n\n"
+            "Imported change details.\n\n"
+            "Co-authored-by: Contributor <contributor@example.invalid>\n\n"
+            "Co-authored-by: Contributor <contributor@example.invalid>\n"
+            "Co-authored-by: Codex <codex@openai.com>\n"
+        )
+        result = self.commit(message)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        parsed = self.git("show", "-s", "--format=%B", "HEAD")
+        trailers = self.git("interpret-trailers", "--parse", str(self.repo / "message.txt"))
+        self.assertIn("Co-authored-by: Contributor <contributor@example.invalid>", trailers.stdout)
+        self.assertIn("Co-authored-by: Codex <codex@openai.com>", trailers.stdout)
+        self.assertIn("Imported change details.", parsed.stdout)
+
     def test_rejects_missing_forged_conflicting_and_body_attribution(self):
         for body in (
             "test(ci): missing attribution\n",
@@ -70,6 +87,9 @@ class AttributionTests(unittest.TestCase):
             "test(ci): invalid\n\nHuman-authored: false\n",
             "test(ci): body mention\n\nCo-authored-by: Codex <codex@openai.com>\n\nThis is prose, not a trailer.\n",
             "test(ci): contributor only\n\nCo-authored-by: Contributor <contributor@example.invalid>\n",
+            "test(ci): hidden upstream author\n\n"
+            "Co-authored-by: Contributor <contributor@example.invalid>\n\n"
+            "Co-authored-by: Codex <codex@openai.com>\n",
         ):
             with self.subTest(body=body):
                 result = self.commit(body)

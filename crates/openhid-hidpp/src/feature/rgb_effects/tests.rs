@@ -253,8 +253,27 @@ fn decodes_cluster_changed_event() {
 }
 
 #[test]
+fn decodes_nv_effect_sync_event_with_its_raw_payload() {
+    let payload = [
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32,
+        0x10,
+    ];
+    assert_eq!(
+        decode_event(3, &payload),
+        Some(RgbEffectsEvent::NvEffectSync { payload })
+    );
+}
+
+#[test]
 fn ignores_unknown_event_sub_id() {
-    assert!(decode_event(7, &[0; 16]).is_none());
+    let payload = [0xa5; 16];
+    for sub_id in 4..=u8::MAX {
+        assert_eq!(
+            decode_event(sub_id, &payload),
+            None,
+            "decoded unknown sub-id {sub_id}"
+        );
+    }
 }
 
 #[test]

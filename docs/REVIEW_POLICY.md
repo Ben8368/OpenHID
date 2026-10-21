@@ -38,8 +38,24 @@ contributes, append its actual tool identity as a Git trailer in the final
 paragraph, separated from the body by a blank line. Do not record a model name.
 Supported tool identities are enforced by
 [commit_attribution.py](../.github/scripts/governance/commit_attribution.py).
-The validator prints the accepted trailers on failure. Preserve human contributor
-trailers when adopting their work. Entirely human commits declare
+The validator prints the accepted trailers on failure. When adopting upstream
+work, inspect the source commits for their authors and co-authors, then preserve
+each distinct human contributor whose work is included with a `Co-authored-by`
+trailer in the final trailer block. Do not infer authorship from the PR owner or
+copy attribution from a source commit embedded in the message body. Changes that
+are deferred or already implemented locally do not earn a trailer on the current
+port commit.
+
+Before pushing an adoption, check the commit that will be pushed:
+
+```powershell
+git show -s --format=%B HEAD | git interpret-trailers --parse
+```
+
+Every expected contributor must appear in that output. A trailer in a nested
+source-commit or PR description is not recognized as a trailer for the OpenHID
+commit. The commit-message hook rejects `Co-authored-by` lines that are not also
+present in Git's parsed final trailer block. Entirely human commits declare
 `Human-authored: true`; this must not coexist with an AI tool trailer.
 
 For example, in PowerShell:
@@ -54,6 +70,11 @@ not enable GPG/SSH signing, invent an author, or rewrite old commits. GitHub bot
 commit through their own application identities; local hook installation does
 not change those identities. CI runs hook regression tests rather than demanding
 new trailers on imported history or automatically generated bot commits.
+
+This policy is the single authority for attribution; upstream-sync procedures
+link here instead of duplicating it. That documentation structure follows the
+single-source and route-from-one-entry approach in [uNAS's agent guide](https://github.com/Ben8368/uNAS/blob/main/AGENTS.md)
+and [governance guide](https://github.com/Ben8368/uNAS/blob/main/docs/GOVERNANCE.md).
 
 ## Install and verify hooks
 
