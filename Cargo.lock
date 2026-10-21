@@ -5583,7 +5583,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "toml 0.8.23",
+ "toml 1.1.2+spec-1.1.0",
  "toml_edit 0.22.27",
  "tracing",
  "tracing-subscriber",
@@ -10465,7 +10465,7 @@ dependencies = [
  "sysinfo 0.39.6",
  "tempfile",
  "time",
- "toml 0.8.23",
+ "toml 1.1.2+spec-1.1.0",
  "which 8.0.6",
  "xshell",
 ]
