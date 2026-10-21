@@ -550,3 +550,15 @@ async fn a_torque_write_fails_when_the_reply_keeps_another_torque() -> Result<()
     refused(&smartshift.set_torque(torque(65)).await, 0x2111);
     Ok(())
 }
+
+#[test]
+fn every_tunable_torque_is_a_torque_percent() {
+    for value in 0..=u8::MAX {
+        let configured = TunableTorque::try_new(value).ok();
+        assert_eq!(
+            configured.map(|torque| encode_tunable_torque(torque).get()),
+            TorquePercent::new(value).map(TorquePercent::get),
+            "torque byte {value}"
+        );
+    }
+}

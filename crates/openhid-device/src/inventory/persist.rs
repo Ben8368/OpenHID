@@ -49,7 +49,10 @@ use super::features::{BatteryProbe, ProbedFeatures};
 /// v12 adds the `Capabilities::virtual_thumbwheel` flag (Back/Forward
 /// raw-wheel reporting).
 /// v13 adds the `0x4220` lock-key event index.
-const SCHEMA_VERSION: u32 = 13;
+/// v14 adds the `0x4521` disabled-key event index.
+/// v15 records whether a legacy `0x1000` battery reports mileage.
+/// v16 adds the `0x2121` hi-res-wheel ratchet event index.
+const SCHEMA_VERSION: u32 = 16;
 
 impl ProbeCacheError {
     /// Report why a store could not keep a snapshot.
@@ -244,9 +247,11 @@ mod tests {
             fn_inversion_multi_host: None,
             extended_dpi: None,
             multi_platform: Some(14),
+            disable_keys: None,
             extended_report_rate: Some(15),
             backlight: Some(16),
             lock_key_state: Some(17),
+            hires_wheel: None,
         };
         let mut cache = HashMap::new();
         cache.insert(

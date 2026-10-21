@@ -1,5 +1,7 @@
 //! Domain types for the `Illumination` feature (`0x1990`).
 
+use std::num::NonZeroU16;
+
 use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 
 use crate::protocol::v20::{ErrorType, Hidpp20Error};
@@ -57,6 +59,18 @@ impl ControlInfo {
             max_levels: payload[7] & 0x0f,
         }
     }
+}
+
+/// The answer of [`IlluminationFeature::get_brightness_effective_max`](super::IlluminationFeature::get_brightness_effective_max).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum BrightnessEffectiveMax {
+    /// The feature version or brightness control does not support this query.
+    Unsupported,
+    /// The query is supported, but no effective maximum is in effect.
+    NoLimit,
+    /// The effective maximum brightness in Lumens.
+    Limit(NonZeroU16),
 }
 
 /// The level configuration of an illumination control.
