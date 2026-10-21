@@ -44,7 +44,7 @@ xshell = "0.2.7"
 
 [dev-dependencies]
 # Reading the generated appcast back the way an XML parser (Sparkle's) sees it.
-roxmltree = "0.20.0"
+roxmltree = "0.21.1"
 
 [lints]
 workspace = true
