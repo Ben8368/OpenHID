@@ -34,8 +34,9 @@ The fetched tip is [`0cbef3a5`](https://github.com/AprilNEA/OpenLogi/commit/0cbe
 unchanged until each change has been compared with OpenHID and given a port or
 skip decision. Work in this order:
 
-1. **Protocol safety and data fidelity:** review upstream #1933 (preserve
-   unmodelled backlight bits), #1936 (safe 0x8070 zone writes), #1937
+1. **Protocol safety and data fidelity:** upstream #1936 (safe 0x8070 zone
+   writes and v1 gating) is ported in OpenHID PR #36. Review #1933 (preserve
+   unmodelled backlight bits), #1937
    (illumination maximum), #1939 (0x2111 torque bounds), #1945 (raw firmware
    bytes), and #1941 (versioned battery status bytes). Then assess #1935
    (thumb-wheel reporting), #1940 (disabled-key reports), #1946 (publish
