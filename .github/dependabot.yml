@@ -32,6 +32,12 @@ updates:
     cooldown:
       default-days: 7
     groups:
+      # The Sparkle driver implements the UpdateDriver trait from
+      # gpui-updater-core, and gpui-updater-pre bounds on that same trait.
+      # Bumping one without the other resolves two core versions and stops
+      # openhid-desktop from compiling, so they always share one PR.
+      gpui-updater:
+        patterns: ["gpui-updater-pre", "gpui-updater-sparkle"]
       rust-compatible:
         patterns: ["*"]
         update-types: [minor, patch]
