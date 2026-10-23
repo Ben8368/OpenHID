@@ -55,6 +55,14 @@ impl RawSession for ExclusiveSession {
     async fn read_input_report(&mut self, buffer: &mut [u8]) -> Result<usize, BackendError> {
         self.inner.read_input_report(buffer).await
     }
+
+    async fn exchange_output_report(
+        &mut self,
+        report: &[u8],
+        input: &mut [u8],
+    ) -> Result<usize, BackendError> {
+        self.inner.exchange_output_report(report, input).await
+    }
 }
 
 #[cfg(test)]

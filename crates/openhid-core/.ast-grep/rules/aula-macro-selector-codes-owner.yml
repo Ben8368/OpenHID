@@ -1,0 +1,22 @@
+# AulaOemMacroEvent owns the OEM selector-code set used by the macro editor.
+id: core-aula-macro-selector-codes-owner
+language: rust
+severity: error
+message: Use AulaOemMacroEvent::selector_events for OEM macro selector codes.
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/openhid-core/src/hid/aula/macro_file.rs
+  - crates/openhid-core/src/hid/aula/macro_transfer.rs
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: "0x00f0"
+    - pattern: "0x00f1"
+    - pattern: "0x00f2"
+    - pattern: "0x00f3"
+    - pattern: "0x00f4"
+    - pattern: "0x00f5"
+    - pattern: "0x00f6"
+    - pattern: "0x00f8"
+    - pattern: "0x00f9"

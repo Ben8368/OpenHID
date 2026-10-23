@@ -1,0 +1,17 @@
+# The four-byte parameter layout for the OEM 0x08/0xA4 key-combination action
+# is owned by AulaOemFnRecords in openhid-core/src/hid/aula/oem_profile.rs.
+id: core-aula-oem-combination-parameter-owner
+language: rust
+severity: error
+message: Use AulaOemFnRecords key-combination accessors instead of duplicating the OEM parameter byte offsets.
+files:
+  - crates/openhid-desktop/src/features/lighting/aula.rs
+ignores:
+  - crates/openhid-core/src/hid/aula/oem_profile.rs
+rule:
+  any:
+    - pattern: $RECORD[8]
+    - pattern: $RECORD[9]
+    - pattern: $RECORD[10]
+    - pattern: $RECORD[11]
+    - pattern: $RECORD[8..12]

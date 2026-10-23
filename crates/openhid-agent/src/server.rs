@@ -433,6 +433,107 @@ impl Agent for AgentServer {
             .await
     }
 
+    async fn set_aula_per_key_rgb(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        colors: openhid_core::hid::aula::AulaPerKeyRgb,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError> {
+        self.shared
+            .hardware()
+            .set_aula_per_key_rgb(&route, colors)
+            .await
+    }
+
+    async fn read_aula_keymap(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError> {
+        self.shared.hardware().read_aula_keymap(&route).await
+    }
+
+    async fn set_aula_keymap(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        keymap: openhid_core::hid::aula::AulaKeymap,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError> {
+        self.shared.hardware().set_aula_keymap(&route, keymap).await
+    }
+
+    async fn read_aula_base_matrix(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaBaseMatrix, WriteError> {
+        self.shared.hardware().read_aula_base_matrix(&route).await
+    }
+
+    async fn read_aula_macro_prefix(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<Vec<u8>, WriteError> {
+        self.shared.hardware().read_aula_macro_prefix(&route).await
+    }
+
+    async fn read_aula_macro_table_candidate(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<Vec<Vec<u8>>, WriteError> {
+        self.shared
+            .hardware()
+            .read_aula_macro_table_candidate(&route)
+            .await
+    }
+
+    async fn read_aula_wired_config(
+        self,
+        _: Context,
+        route: DeviceRoute,
+    ) -> Result<Vec<u8>, WriteError> {
+        self.shared.hardware().read_aula_wired_config(&route).await
+    }
+
+    async fn set_aula_wired_config(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        bytes: Vec<u8>,
+    ) -> Result<Vec<u8>, WriteError> {
+        self.shared
+            .hardware()
+            .set_aula_wired_config(&route, bytes)
+            .await
+    }
+
+    async fn set_aula_wired_keymap(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        bytes: Vec<u8>,
+    ) -> Result<(), WriteError> {
+        self.shared
+            .hardware()
+            .set_aula_wired_keymap(&route, bytes)
+            .await
+    }
+
+    async fn set_aula_keymap_if_unchanged(
+        self,
+        _: Context,
+        route: DeviceRoute,
+        expected: openhid_core::hid::aula::AulaKeymap,
+        keymap: openhid_core::hid::aula::AulaKeymap,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError> {
+        self.shared
+            .hardware()
+            .set_aula_keymap_if_unchanged(&route, expected, keymap)
+            .await
+    }
+
     async fn set_light(
         self,
         _: Context,

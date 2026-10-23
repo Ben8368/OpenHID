@@ -1,0 +1,12 @@
+# AulaOemFnLayer owns OEM-profile to wireless matrix action conversion.
+id: core-aula-oem-keymap-action-owner
+language: rust
+severity: error
+message: Use AulaOemFnLayer action conversion methods for OEM profile and matrix encodings.
+files:
+  - crates/**/aula*.rs
+ignores:
+  - crates/openhid-core/src/hid/aula/oem_profile.rs
+  - "**/tests.rs"
+rule:
+  pattern: let [$USAGE, 0, 0, $PAGE] = $ACTION else { $$$BODY };

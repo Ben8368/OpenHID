@@ -1,0 +1,12 @@
+# AulaOemMacroTree owns reserved-ID and collision resolution for macro nodes.
+id: core-aula-macro-node-id-owner
+language: rust
+severity: error
+message: Use AulaOemMacroTree::next_available_node_id for AULA macro node ID resolution.
+files:
+  - crates/**/aula*.rs
+ignores:
+  - crates/openhid-core/src/hid/aula/macro_tree.rs
+  - "**/tests.rs"
+rule:
+  pattern: while $ID == AULA_OEM_MACRO_TREE_ROOT_NODE_ID || $$$CONDITION { $$$BODY }

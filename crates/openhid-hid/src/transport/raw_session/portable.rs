@@ -48,4 +48,28 @@ impl RawSession for Session {
         self.gate.ensure_allowed()?;
         Ok(length)
     }
+
+    async fn exchange_output_report(
+        &mut self,
+        report: &[u8],
+        input: &mut [u8],
+    ) -> Result<usize, BackendError> {
+        self.gate.ensure_allowed()?;
+        let (reader, writer) = (&mut self.reader, &mut self.writer);
+        let read = async {
+            reader
+                .read_input_report(input)
+                .await
+                .map_err(super::super::backend_error)
+        };
+        let write = async {
+            writer
+                .write_output_report(report)
+                .await
+                .map_err(super::super::backend_error)
+        };
+        let (length, ()) = tokio::try_join!(read, write)?;
+        self.gate.ensure_allowed()?;
+        Ok(length)
+    }
 }

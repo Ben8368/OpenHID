@@ -13,5 +13,6 @@ ruleDirs:
   - crates/openhid-hook/.ast-grep/rules
   - crates/openhid-inject/.ast-grep/rules
   - crates/openhid-ipc/.ast-grep/rules
+  - crates/openhid-hid/.ast-grep/rules
   - crates/openhid-overlay/.ast-grep/rules
   - xtask/.ast-grep/rules

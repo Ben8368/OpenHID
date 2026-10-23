@@ -1,0 +1,10 @@
+# The 520-byte wired Feature Report uses usage-page/usage slots, not wireless
+# matrix action encodings. Keep CLI conversion at aula_wired_keymap_action_output.
+id: core-aula-wired-keymap-action-owner
+language: rust
+severity: error
+message: Use `aula_wired_keymap_action_output` for actions written to an `AulaWiredKeymapBlob`.
+files:
+  - crates/openhid-cli/src/cmd/aula_keymap.rs
+rule:
+  pattern: "aula_keymap_action_output($NAME)"

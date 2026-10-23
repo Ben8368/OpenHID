@@ -14,6 +14,7 @@ categories = ["command-line-utilities", "hardware-support"]
 [dependencies]
 openhid-core = { path = "../openhid-core", version = "0.8.14", features = ["logging", "worker"] }
 openhid-device = { path = "../openhid-device", version = "0.8.14" }
+openhid-device-registry = { path = "../openhid-device-registry", version = "0.8.14" }
 openhid-fixture = { workspace = true, features = ["fs"] }
 openhid-hid = { path = "../openhid-hid", version = "0.8.14" }
 openhid-camera = { path = "../openhid-camera", version = "0.8.14" }

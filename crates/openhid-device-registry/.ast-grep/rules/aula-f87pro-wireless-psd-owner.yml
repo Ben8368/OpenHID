@@ -1,0 +1,15 @@
+# Owner: openhid_device_registry::aula::matches_f87_pro_wireless_psd owns the
+# F87 Pro wireless profile discriminator. Consumers call the registry decision.
+id: aula-f87pro-wireless-psd-owner
+language: rust
+severity: error
+message: Use openhid_device_registry::aula::matches_f87_pro_wireless_psd; the F87 Pro wireless PSD belongs to the device registry.
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/openhid-device-registry/src/aula.rs
+  - "**/tests.rs"
+  - "**/tests/**"
+  - "**/*_tests.rs"
+rule:
+  pattern: '[0x03, 0, 0, 0, 1, 0x0b]'

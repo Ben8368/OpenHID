@@ -5,6 +5,9 @@ use clap::Subcommand;
 
 pub mod api;
 pub mod assets;
+pub mod aula_keymap;
+pub mod aula_macro;
+pub mod aula_wired;
 pub mod backlight;
 pub mod camera;
 pub mod diag;
@@ -21,6 +24,15 @@ pub enum Command {
     List(list::ListArgs),
     /// Read or persistently set the keyboard backlight (HID++ 0x1982).
     Backlight(backlight::BacklightArgs),
+    /// Import, export and edit AULA OEM macro files without accessing a keyboard.
+    #[command(subcommand)]
+    AulaMacro(aula_macro::AulaMacroCmd),
+    /// Edit AULA keymap profiles and upload wired keymap reports.
+    #[command(subcommand)]
+    AulaKeymap(aula_keymap::AulaKeymapCmd),
+    /// Back up and restore the wired AULA F87 Pro configuration block.
+    #[command(subcommand)]
+    AulaWired(aula_wired::AulaWiredCmd),
     /// Capture one frame from a Logitech webcam to a PNG.
     Snapshot(snapshot::SnapshotArgs),
     /// Read or write device-level UVC image controls on a webcam.
@@ -49,6 +61,9 @@ impl Command {
             Self::Api(command) => return api::run(command).await,
             Self::List(args) => return list::run(args).await,
             Self::Backlight(args) => backlight::run(args).await?,
+            Self::AulaMacro(command) => command.run()?,
+            Self::AulaKeymap(command) => command.run().await?,
+            Self::AulaWired(command) => command.run().await?,
             // Camera capture is blocking AVFoundation — no need for the async runtime.
             Self::Snapshot(args) => snapshot::run(args)?,
             // UVC control transfers are blocking IOKit — no async runtime needed.

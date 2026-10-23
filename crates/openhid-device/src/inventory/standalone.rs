@@ -3,7 +3,9 @@
 use std::collections::{HashMap, HashSet};
 
 use openhid_core::device::{DeviceKind, RawDeviceAddress, StandaloneDevice};
-use openhid_device_registry::aula::{DRIVER_ID as AULA_DRIVER_ID, matches_control};
+use openhid_device_registry::aula::{
+    DRIVER_ID as AULA_DRIVER_ID, WIRED_DRIVER_ID as AULA_WIRED_DRIVER_ID, matches_control,
+};
 use openhid_device_registry::headset::{GAMING_HEADSET_DRIVER_ID, find_gaming_headset};
 use openhid_device_registry::litra::find_litra;
 
@@ -35,12 +37,48 @@ pub async fn enumerate_standalone(
                 ) && node.identity() == device.address.identity
             })
         {
-            match crate::aula::read_config(backend, node).await {
-                Ok(_) => device.online = true,
+            match crate::aula::read_state(backend, node).await {
+                Ok(state) => {
+                    device.online = true;
+                    device.battery = state.battery.map(|battery| battery.info);
+                }
                 Err(error) => tracing::debug!(%error, "AULA configuration probe failed"),
             }
         }
     }
+
+    // The shared wired VID/PID is not enough to claim an AULA keyboard. Add
+    // only collections that answered the read-only F87 Pro model query.
+    let wired_nodes = match crate::aula::discover_wired_f87_nodes(backend, &nodes).await {
+        Ok(nodes) => nodes,
+        Err(error) => {
+            tracing::debug!(%error, "AULA wired model discovery failed");
+            Vec::new()
+        }
+    };
+    for node in wired_nodes {
+        devices.push(StandaloneDevice {
+            address: RawDeviceAddress {
+                vendor_id: node.vendor_id,
+                product_id: node.product_id,
+                usage_page: node.usage_page,
+                usage_id: node.usage_id,
+                identity: node.identity(),
+            },
+            display_name: "AULA F87 PRO (USB)".into(),
+            manufacturer: node.manufacturer.clone(),
+            serial_number: node.serial_number.clone(),
+            unit_id: [0; 4],
+            kind: DeviceKind::Keyboard,
+            online: true,
+            capabilities: None,
+            light_capabilities: None,
+            driver_id: AULA_WIRED_DRIVER_ID.into(),
+            registry_model_id: None,
+            battery: None,
+        });
+    }
+    validate_no_ambiguous_nodes(&devices)?;
     Ok(devices)
 }
 
@@ -71,6 +109,7 @@ pub(crate) fn standalone_device(device: &crate::backend::NodeInfo) -> Option<Sta
             light_capabilities: Some(litra_capabilities(descriptor.model)),
             driver_id: descriptor.driver_id.to_owned(),
             registry_model_id: Some(descriptor.registry_model_id.to_owned()),
+            battery: None,
         });
     }
 
@@ -98,6 +137,7 @@ pub(crate) fn standalone_device(device: &crate::backend::NodeInfo) -> Option<Sta
             light_capabilities: None,
             driver_id: GAMING_HEADSET_DRIVER_ID.to_owned(),
             registry_model_id: Some(descriptor.registry_model_id.to_owned()),
+            battery: None,
         });
     }
 
@@ -125,6 +165,7 @@ pub(crate) fn standalone_device(device: &crate::backend::NodeInfo) -> Option<Sta
             light_capabilities: None,
             driver_id: AULA_DRIVER_ID.into(),
             registry_model_id: None,
+            battery: None,
         });
     }
     None
@@ -203,6 +244,7 @@ mod tests {
             light_capabilities: None,
             driver_id: "litra".into(),
             registry_model_id: None,
+            battery: None,
         }
     }
 

@@ -7,13 +7,16 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
-use async_hid::{AsyncHidWrite as _, Device, DeviceWriter};
+use async_hid::{
+    AsyncHidFeatureHandle as _, AsyncHidWrite as _, Device, DeviceFeatureHandle, DeviceWriter,
+};
 use hidpp::async_trait;
 use hidpp::channel::HidppChannel;
 
 use openhid_device::DeviceIoGate;
 use openhid_device::backend::{
-    BackendError, HidBackend, HotplugStream, NodeId, NodeInfo, RawSession, RawWriter,
+    BackendError, FeatureSession, HidBackend, HotplugStream, NodeId, NodeInfo, RawSession,
+    RawWriter,
 };
 
 use crate::recording::{
@@ -244,6 +247,28 @@ impl HidBackend for NativeBackend {
         super::raw_session::open(&device, self.device_io.clone()).await
     }
 
+    async fn open_feature_session(
+        &self,
+        node: &NodeInfo,
+    ) -> Result<Box<dyn FeatureSession>, BackendError> {
+        if self.recording.is_some() {
+            return Err(BackendError::Backend(
+                "HID Feature Report sessions are not supported by the fixture recorder".into(),
+            ));
+        }
+        self.device_io.ensure_allowed()?;
+        let handle = self
+            .handle(node)?
+            .open_feature_handle()
+            .await
+            .map_err(super::backend_error)?;
+        self.device_io.ensure_allowed()?;
+        Ok(Box::new(NativeFeatureSession {
+            handle,
+            device_io: self.device_io.clone(),
+        }))
+    }
+
     fn watch(&self) -> Result<HotplugStream, BackendError> {
         Ok(Box::new(watch_nodes()?))
     }
@@ -253,6 +278,31 @@ impl HidBackend for NativeBackend {
 struct NativeRawWriter {
     writer: DeviceWriter,
     device_io: DeviceIoGate,
+}
+
+/// [`FeatureSession`] over an `async-hid` Feature Report handle.
+struct NativeFeatureSession {
+    handle: DeviceFeatureHandle,
+    device_io: DeviceIoGate,
+}
+
+#[async_trait]
+impl FeatureSession for NativeFeatureSession {
+    async fn read_feature_report(&mut self, buffer: &mut [u8]) -> Result<usize, BackendError> {
+        self.device_io.ensure_allowed()?;
+        self.handle
+            .read_feature_report(buffer)
+            .await
+            .map_err(super::backend_error)
+    }
+
+    async fn write_feature_report(&mut self, report: &[u8]) -> Result<(), BackendError> {
+        self.device_io.ensure_allowed()?;
+        self.handle
+            .write_feature_report(report)
+            .await
+            .map_err(super::backend_error)
+    }
 }
 
 #[async_trait]

@@ -1,7 +1,7 @@
 //! Agent policy proofs use an injected replay; no native device is opened.
 
 use super::*;
-use openhid_core::hid::aula::{LightingChange, LightingMode};
+use openhid_core::hid::aula::{AulaPerKeyRgb, AulaRgb, LightingChange, LightingMode};
 use openhid_hid::replay::{
     NodePresence, OpenOutcome, RawWriterAvailability, ReplayBackend, ReplayNode, ReplayTopology,
 };
@@ -132,6 +132,12 @@ async fn aula_read_and_owned_write_use_only_the_injected_backend() {
         .await;
     assert!(
         matches!(write, Err(WriteError::Hid(message)) if message.contains("this backend has no raw input session"))
+    );
+    let per_key = hardware
+        .set_aula_per_key_rgb(&route, AulaPerKeyRgb::solid(AulaRgb::new(1, 2, 3)))
+        .await;
+    assert!(
+        matches!(per_key, Err(WriteError::Hid(message)) if message.contains("this backend has no raw input session"))
     );
     assert_eq!(
         backend.open_count(&"agent-aula".to_owned().into()).unwrap(),

@@ -121,7 +121,27 @@ pub use succession::Identity;
 ///      and sleep settings, explicit persistence and preview.
 ///      `Agent::{observe_notices, observe_lock_keys}`, notice payloads and
 ///      lock-key observations appended from upstream; existing RPC indices stay.
-pub const PROTOCOL_VERSION: u32 = 38;
+/// v39: `Agent::set_aula_per_key_rgb` appended for complete F87 PRO-family
+///      wireless RGB tables and acknowledged custom-mode configuration;
+///      AULA lighting state/change append built-in color mode and color selection.
+/// v40: `Agent::{read_aula_keymap, set_aula_keymap}` appended for complete
+///      F87 PRO wireless base/Fn snapshots and recoverable writes.
+///      `Agent::read_aula_base_matrix` appended for independent base-layer reads.
+///      `AulaState`/`AulaChange` append independently sourced wireless debounce
+///      and side-light effect settings; direct F87 confirmation is pending.
+///      `AulaState` also appends the optional wireless battery reading.
+///      `StandaloneDevice` appends its optional generic battery reading.
+/// v41: `Agent::read_aula_macro_prefix` appended for serialized, read-only
+///      access to the experimental F87 PRO wireless macro-memory prefix.
+///      `Agent::read_aula_macro_table_candidate` appended for serialized,
+///      read-only repeated OEM-shaped reads up to the generic aggregate encoder's
+///      0x2800-byte ceiling; this is not established as the F87 capacity.
+///      `Agent::{read_aula_wired_config, set_aula_wired_config}` appended for
+///      Agent-owned F87 Pro wired configuration backup, verified writes, and recovery.
+///      `Agent::set_aula_wired_keymap` appended for model-gated wired keymap uploads.
+///      `Agent::set_aula_keymap_if_unchanged` appended to reject stale desktop
+///      keymap drafts before the existing recovery-protected wireless write.
+pub const PROTOCOL_VERSION: u32 = 41;
 
 /// Environment variable through which the agent hands a supervised helper the
 /// run token it will serve, so the helper knows which agent it belongs to
@@ -854,6 +874,58 @@ pub trait Agent {
     /// generation `since`, or with the unchanged indicator after
     /// [`OBSERVE_HOLD`]. Pass `0` to read the current indicator at once.
     async fn observe_lock_keys(since: Generation) -> LockKeyObservation;
+
+    /// Apply a complete F87 PRO wireless per-key color table and save custom mode.
+    /// The keyboard does not expose verified color-table readback.
+    async fn set_aula_per_key_rgb(
+        route: DeviceRoute,
+        colors: openhid_core::hid::aula::AulaPerKeyRgb,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError>;
+    /// Read a complete validated raw base+Fn keymap snapshot.
+    async fn read_aula_keymap(
+        route: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError>;
+    /// Write and verify both layers; the agent restores the previous snapshot on failure.
+    async fn set_aula_keymap(
+        route: DeviceRoute,
+        keymap: openhid_core::hid::aula::AulaKeymap,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError>;
+    /// Read the validated F87 PRO base layer without requesting the Fn layer.
+    async fn read_aula_base_matrix(
+        route: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaBaseMatrix, WriteError>;
+
+    /// Read the experimental F87 PRO wireless macro-memory prefix through the
+    /// agent's serialized raw-HID path. The returned bytes are incomplete and
+    /// are not a restorable macro backup.
+    async fn read_aula_macro_prefix(route: DeviceRoute) -> Result<Vec<u8>, WriteError>;
+
+    /// Read the complete healthy wired F87 Pro config block through the Agent.
+    async fn read_aula_wired_config(route: DeviceRoute) -> Result<Vec<u8>, WriteError>;
+
+    /// Replace and verify the full wired config block; the Agent restores its
+    /// captured original block if the write or readback fails.
+    async fn set_aula_wired_config(
+        route: DeviceRoute,
+        bytes: Vec<u8>,
+    ) -> Result<Vec<u8>, WriteError>;
+
+    /// Write a validated wired F87 Pro keymap report after the Agent verifies
+    /// the exact route and model. The device does not provide reliable readback.
+    async fn set_aula_wired_keymap(route: DeviceRoute, bytes: Vec<u8>) -> Result<(), WriteError>;
+
+    /// Apply a wireless keymap only if it still matches the caller's loaded snapshot.
+    async fn set_aula_keymap_if_unchanged(
+        route: DeviceRoute,
+        expected: openhid_core::hid::aula::AulaKeymap,
+        keymap: openhid_core::hid::aula::AulaKeymap,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError>;
+
+    /// Read the experimental OEM-sized wireless macro-table candidate.
+    /// Each returned read is raw diagnostic data, not a complete or restorable table.
+    async fn read_aula_macro_table_candidate(
+        route: DeviceRoute,
+    ) -> Result<Vec<Vec<u8>>, WriteError>;
 }
 
 /// One native-tray request scoped to an agent run and publication.

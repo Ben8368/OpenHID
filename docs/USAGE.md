@@ -4,7 +4,7 @@ The `openhid` command-line tool. For install and configuration, see the
 [README](../README.md).
 
 ```sh
-openhid list                 # paired devices: slot, codename, kind, online, battery
+openhid list                 # paired and standalone devices: identity, kind, online, battery
 openhid assets sync          # pre-fetch device renders from the fastest available mirror
 openhid backlight             # read or persistently set keyboard backlight (HID++ 0x1982)
 openhid camera               # read or write Logitech UVC image controls
@@ -18,8 +18,16 @@ openhid diag aula --effect 12 --brightness 3 --save # explicitly SAVE and read b
 openhid diag aula --matrix # experimental read-only raw key matrix
 openhid diag aula --matrix --backup f87-base-matrix.json # matrix-only export; no restore yet
 openhid diag aula --sleep 600 --preview # verify a sleep edit, then restore
+openhid diag aula --debounce 3 --preview # verify a debounce edit, then restore
 openhid diag aula --backup f87-config.json # configuration block; excludes keymaps/macros/RGB tables
 openhid diag aula --restore f87-config.json --save # restore validated configuration and verify
+openhid aula-keymap inspect --input wired-base.bin # inspect a captured wired Feature Report offline
+openhid aula-keymap replace-slot --input wired-base.bin --output edited.bin --index 58 --bytes 00000068
+openhid aula-keymap replace-key --input wired-base.bin --output edited.bin --key A --bytes 00000068
+openhid aula-keymap list-actions # shared action names and raw encodings
+openhid aula-keymap set-action --input wired-base.bin --output edited.bin --key A --action f24
+openhid aula-keymap set-layer --input wired-base.bin --output fn-layer.bin --layer fn
+openhid aula-keymap restore-fn-defaults --input f87-base-matrix.json --output f87-oem-fn.json # combine a matrix backup with OEM Fn defaults offline
 openhid diag features        # dump every HID++ feature the active device reports
 openhid diag controls        # dump reprogrammable controls and capability flags
 openhid diag battery          # read the raw battery report (0x1004 / 0x1000 / 0x1F20)
@@ -31,6 +39,14 @@ openhid diag wheel                     # read or set HID++ 0x2121 wheel reportin
 openhid diag lighting ff0000           # solid colour for a wired RGB keyboard (any RRGGBB hex)
 ```
 
+`aula-keymap list-actions` shows single-key outputs representable in the
+offline wired Feature Report, including display brightness up/down.
+`set-action` rejects wireless modifier chords, OEM-only actions, and consumer
+usages wider than one byte; use `replace-slot` for a raw four-byte wired slot.
+The desktop's wireless matrix editor separately
+accepts shortcuts such as `ctrl+shift+a`, `alt+f4`, and `windows+r`. Both paths
+edit local drafts or supplied files; neither listing verifies device acceptance.
+
 Running `openhid` with no subcommand defaults to `list`. Set
 `OPENHID_LOG=debug` for verbose tracing in the CLI, GUI, or agent.
 
@@ -38,6 +54,14 @@ Running `openhid` with no subcommand defaults to `list`. Set
 
 Experimental AULA F87 PRO support and hardware acceptance steps are documented in
 [the device notes](devices/aula-f87-pro.md).
+
+`openhid aula-keymap` edits user-supplied 520-byte wired keymap reports and
+versioned wireless keymap profiles offline. `restore-fn-defaults` replaces only
+the Fn layer with the F87 PRO assignments from the installed OEM `KB.ini`,
+retains the supplied base layer, and creates a new output file. Input may be a
+wireless keymap profile or a base-matrix JSON backup from `diag aula --matrix
+--backup`. These commands do not write to a keyboard; the OEM Fn map is not a
+device backup.
 
 ## Automation API
 
@@ -120,7 +144,9 @@ Capabilities are the agent's measured feature flags, not guesses based on
 device kind.
 Not every readable setting has an inventory flag; a setting read can return
 `unsupported_feature`. Standalone lights are listed with their light capability
-descriptor and null battery. Cameras are not part of this agent inventory API.
+descriptor and null battery. The AULA F87 PRO inventory includes a best-effort
+read-only battery percentage when its wireless receiver responds. Cameras are not
+part of this agent inventory API.
 The response excludes pairing passkeys, application history, and model serials.
 
 ### Immediate control and saved preferences

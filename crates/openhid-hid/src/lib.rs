@@ -34,11 +34,15 @@ pub use host::{
     apply_litra, channel_pool, dump_features, dump_firmware_entities, dump_reprog_controls,
     enumerate, enumerate_standalone, get_backlight, get_dpi, get_dpi_info, get_pointer_scaling,
     get_scroll_wheel_mode, get_smartshift_status, list_pairing_receivers, play_haptic,
-    read_aula_config, read_aula_matrix, read_aula_state, read_battery_raw, read_litra_state,
-    set_dpi, set_fn_lock, set_keyboard_color, set_keyboard_color_with, set_pointer_scaling,
-    set_scroll_inversion, set_scroll_resolution, set_scroll_wheel_mode, set_smartshift,
-    set_smartshift_sensitivity, set_smartshift_torque, start_aula_lighting, start_aula_restore,
-    start_aula_settings, toggle_smartshift, update_backlight, watch_hotplug, watch_litra,
+    read_aula_base_matrix, read_aula_config, read_aula_keymap, read_aula_keymap_oem_carrier,
+    read_aula_matrix, read_aula_matrix_oem_carrier, read_aula_psd, read_aula_state,
+    read_aula_wired_config, read_aula_wired_macro_table, read_aula_wired_model_probe,
+    read_battery_raw, read_litra_state, set_dpi, set_fn_lock, set_keyboard_color,
+    set_keyboard_color_with, set_pointer_scaling, set_scroll_inversion, set_scroll_resolution,
+    set_scroll_wheel_mode, set_smartshift, set_smartshift_sensitivity, set_smartshift_torque,
+    start_aula_lighting, start_aula_per_key_rgb, start_aula_restore, start_aula_settings,
+    toggle_smartshift, update_aula_keymap, update_backlight, watch_hotplug, watch_litra,
+    write_aula_wired_config, write_aula_wired_keymap, write_aula_wired_macro_table,
 };
 pub use lighting::{set_keyboard_color_on, set_keyboard_color_with_on};
 pub use probe_cache::FileProbeCacheStore;

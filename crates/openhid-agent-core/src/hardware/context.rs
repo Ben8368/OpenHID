@@ -1,6 +1,6 @@
 //! Shared ownership of the agent's hardware backend and host-I/O policy.
 
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use openhid_core::device::{LightState, StandaloneDevice};
 use openhid_core::hid::{LightCommand, PairingError, WriteError};
@@ -82,15 +82,10 @@ impl HardwareContext {
         &self,
         route: &DeviceRoute,
     ) -> Result<openhid_core::hid::aula::AulaState, WriteError> {
-        let identity =
-            openhid_core::hid::aula::route_identity(route).ok_or(WriteError::DeviceNotFound)?;
-        self.device_io
-            .ensure_allowed()
-            .map_err(|_| WriteError::DeviceNotFound)?;
-        openhid_hid::aula::read_selected_config(&*self.backend, Some(identity))
-            .await
-            .map(|config| config.aula_state())
-            .map_err(|error| WriteError::Hid(error.to_string()))
+        self.read_aula_locked(route, |backend, identity| async move {
+            openhid_hid::aula::read_selected_state(&*backend, Some(&identity)).await
+        })
+        .await
     }
 
     /// Compatibility lighting view of the shared, verified settings snapshot.
@@ -138,6 +133,213 @@ impl HardwareContext {
         self.set_aula_settings(route, change, mode)
             .await
             .map(|state| state.lighting)
+    }
+
+    /// Apply a complete per-key RGB table, then select and verify custom mode.
+    pub async fn set_aula_per_key_rgb(
+        &self,
+        route: &DeviceRoute,
+        colors: openhid_core::hid::aula::AulaPerKeyRgb,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError> {
+        let identity =
+            openhid_core::hid::aula::route_identity(route).ok_or(WriteError::DeviceNotFound)?;
+        openhid_hid::host::start_aula_per_key_rgb_on(
+            Arc::clone(&self.backend),
+            self.device_io.clone(),
+            Some(identity),
+            colors,
+        )
+        .await?
+        .finish()
+        .await
+    }
+
+    /// Read both validated raw keymap layers through this context's backend.
+    pub async fn read_aula_keymap(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError> {
+        self.read_aula_locked(route, |backend, identity| async move {
+            openhid_hid::aula::read_selected_keymap(&*backend, Some(&identity)).await
+        })
+        .await
+    }
+
+    /// Read the validated base layer independently of the unverified Fn selector.
+    pub async fn read_aula_base_matrix(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaBaseMatrix, WriteError> {
+        self.read_aula_locked(route, |backend, identity| async move {
+            openhid_hid::aula::read_selected_base_matrix(&*backend, Some(&identity)).await
+        })
+        .await
+    }
+
+    /// Read the experimental F87 PRO macro-memory prefix through this
+    /// context's serialized device-I/O path.
+    pub async fn read_aula_macro_prefix(&self, route: &DeviceRoute) -> Result<Vec<u8>, WriteError> {
+        self.read_aula_locked(route, |backend, identity| async move {
+            openhid_hid::aula::read_selected_macro_prefix(&*backend, Some(&identity))
+                .await
+                .map(|prefix| prefix.bytes().to_vec())
+        })
+        .await
+    }
+
+    /// Read the experimental OEM-sized wireless macro-table candidate through
+    /// this context's serialized device-I/O path.
+    pub async fn read_aula_macro_table_candidate(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<Vec<Vec<u8>>, WriteError> {
+        self.read_aula_locked(route, |backend, identity| async move {
+            openhid_hid::aula::read_selected_macro_table_candidate(&*backend, Some(&identity))
+                .await
+                .map(|candidate| candidate.reads().to_vec())
+        })
+        .await
+    }
+
+    /// Read a complete healthy wired F87 Pro config block through the
+    /// per-route Agent I/O queue.
+    pub async fn read_aula_wired_config(&self, route: &DeviceRoute) -> Result<Vec<u8>, WriteError> {
+        let identity = openhid_core::hid::aula::wired_route_identity(route)
+            .ok_or(WriteError::DeviceNotFound)?
+            .to_owned();
+        let backend = Arc::clone(&self.backend);
+        let device_io = self.device_io.clone();
+        openhid_hid::lighting::LightingJob::spawn(route, move |_cancel| async move {
+            device_io
+                .ensure_allowed()
+                .map_err(|_| WriteError::DeviceNotFound)?;
+            openhid_hid::aula::read_wired_config(&*backend, Some(&identity))
+                .await
+                .map(|block| block.as_bytes().to_vec())
+                .map_err(|error| WriteError::Hid(error.to_string()))
+        })?
+        .finish()
+        .await
+    }
+
+    /// Write and verify a full wired config block in an owned per-route Agent
+    /// worker so snapshot recovery continues if the requesting client leaves.
+    pub async fn set_aula_wired_config(
+        &self,
+        route: &DeviceRoute,
+        bytes: Vec<u8>,
+    ) -> Result<Vec<u8>, WriteError> {
+        let identity = openhid_core::hid::aula::wired_route_identity(route)
+            .ok_or(WriteError::DeviceNotFound)?
+            .to_owned();
+        let block = openhid_hid::aula::WiredConfigBlock::from_bytes(&bytes)
+            .map_err(|error| WriteError::Hid(error.to_string()))?;
+        let backend = Arc::clone(&self.backend);
+        let device_io = self.device_io.clone();
+        openhid_hid::lighting::LightingJob::spawn(route, move |_cancel| async move {
+            device_io
+                .ensure_allowed()
+                .map_err(|_| WriteError::DeviceNotFound)?;
+            openhid_hid::aula::write_wired_config(&*backend, Some(&identity), &block)
+                .await
+                .map(|block| block.as_bytes().to_vec())
+                .map_err(|error| WriteError::Hid(error.to_string()))
+        })?
+        .finish()
+        .await
+    }
+
+    /// Upload one wired F87 Pro keymap report through the per-route Agent
+    /// worker after validating its format and exact wired device identity.
+    pub async fn set_aula_wired_keymap(
+        &self,
+        route: &DeviceRoute,
+        bytes: Vec<u8>,
+    ) -> Result<(), WriteError> {
+        let identity = openhid_core::hid::aula::wired_route_identity(route)
+            .ok_or(WriteError::DeviceNotFound)?
+            .to_owned();
+        let blob = openhid_core::hid::aula::AulaWiredKeymapBlob::from_bytes(bytes)
+            .map_err(|error| WriteError::Hid(error.to_string()))?;
+        let backend = Arc::clone(&self.backend);
+        let device_io = self.device_io.clone();
+        openhid_hid::lighting::LightingJob::spawn(route, move |_cancel| async move {
+            device_io
+                .ensure_allowed()
+                .map_err(|_| WriteError::DeviceNotFound)?;
+            openhid_hid::aula::write_wired_keymap(&*backend, Some(&identity), &blob)
+                .await
+                .map_err(|error| WriteError::Hid(error.to_string()))
+        })?
+        .finish()
+        .await
+    }
+
+    async fn read_aula_locked<T, Operation, OperationFuture>(
+        &self,
+        route: &DeviceRoute,
+        operation: Operation,
+    ) -> Result<T, WriteError>
+    where
+        T: Send + 'static,
+        Operation: FnOnce(Arc<dyn HidBackend>, String) -> OperationFuture + Send + 'static,
+        OperationFuture: Future<Output = Result<T, openhid_hid::aula::ReadError>> + Send + 'static,
+    {
+        let identity = openhid_core::hid::aula::route_identity(route)
+            .ok_or(WriteError::DeviceNotFound)?
+            .to_owned();
+        let backend = Arc::clone(&self.backend);
+        let device_io = self.device_io.clone();
+        openhid_hid::lighting::LightingJob::spawn(route, move |_cancel| async move {
+            device_io
+                .ensure_allowed()
+                .map_err(|_| WriteError::DeviceNotFound)?;
+            operation(backend, identity)
+                .await
+                .map_err(|error| WriteError::Hid(error.to_string()))
+        })?
+        .finish()
+        .await
+    }
+
+    /// Apply a complete keymap with owned cancellation and exact restoration.
+    pub async fn set_aula_keymap(
+        &self,
+        route: &DeviceRoute,
+        keymap: openhid_core::hid::aula::AulaKeymap,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError> {
+        let identity =
+            openhid_core::hid::aula::route_identity(route).ok_or(WriteError::DeviceNotFound)?;
+        openhid_hid::host::start_aula_keymap_on(
+            Arc::clone(&self.backend),
+            self.device_io.clone(),
+            Some(identity),
+            keymap,
+        )
+        .await?
+        .finish()
+        .await
+    }
+
+    /// Apply a keymap only if it still matches the complete snapshot the caller edited.
+    pub async fn set_aula_keymap_if_unchanged(
+        &self,
+        route: &DeviceRoute,
+        expected: openhid_core::hid::aula::AulaKeymap,
+        keymap: openhid_core::hid::aula::AulaKeymap,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError> {
+        let identity =
+            openhid_core::hid::aula::route_identity(route).ok_or(WriteError::DeviceNotFound)?;
+        openhid_hid::host::start_aula_keymap_if_unchanged_on(
+            Arc::clone(&self.backend),
+            self.device_io.clone(),
+            Some(identity),
+            expected,
+            keymap,
+        )
+        .await?
+        .finish()
+        .await
     }
 
     pub(crate) fn set_light_in_background(

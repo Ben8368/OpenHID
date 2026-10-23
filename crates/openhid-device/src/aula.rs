@@ -11,19 +11,55 @@ use thiserror::Error;
 use crate::backend::{BackendError, HidBackend, NodeInfo, RawSession};
 
 mod backup;
+mod battery;
 mod lighting;
+mod macros;
 mod matrix;
+mod palette;
+pub mod per_key;
 mod transaction;
-pub use lighting::{LightingChange, LightingMode, LightingState, update_lighting};
-pub use matrix::{WirelessMatrix, read_selected_matrix};
-pub use openhid_core::hid::aula::{AulaChange, AulaState, SleepTimeout};
+mod wired;
+pub use battery::read_selected_state;
+pub(crate) use battery::read_state;
+pub use lighting::{
+    AulaColorModeChange, AulaColorModeState, LightingChange, LightingMode, LightingState,
+    update_lighting,
+};
+pub use macros::{
+    WirelessMacroPrefix, WirelessMacroTableCandidate, read_selected_macro_prefix,
+    read_selected_macro_table_candidate,
+};
+pub use matrix::{
+    KeymapPlanError, KeymapWriteError, MatrixWritePlan, WirelessMatrix, is_matrix_write_ack,
+    plan_keymap_write, read_selected_base_matrix, read_selected_keymap,
+    read_selected_keymap_with_oem_carrier, read_selected_matrix,
+    read_selected_matrix_with_oem_carrier, update_selected_keymap,
+    update_selected_keymap_if_unchanged,
+};
+pub use openhid_core::hid::aula::{
+    AulaBattery, AulaBatteryPowerSource, AulaChange, AulaDebounce, AulaPerKeyRgb, AulaRgb,
+    AulaSideLightEffect, AulaState, SleepTimeout,
+};
+pub use per_key::{PerKeyRgbError, apply_selected_per_key_rgb};
 pub use transaction::{ConfigChange, ConfigError, ConfigResult, update_config};
+pub use wired::{
+    InvalidWiredConfigBlock, InvalidWiredMacroTable, WiredConfigBlock, WiredConfigReadError,
+    WiredConfigWriteError, WiredKeymapWriteError, WiredMacroReadError, WiredMacroTable,
+    WiredMacroWriteError, WiredModelProbe, WiredProbeError, discover_wired_f87_nodes,
+    read_wired_config, read_wired_macro_table, read_wired_model_probe, write_wired_config,
+    write_wired_keymap, write_wired_macro_table,
+};
 
 const FRAME_LENGTH: usize = 20;
 const FRAGMENT_COUNT: usize = 10;
-const READ_TIMEOUT: Duration = Duration::from_secs(2);
+const READ_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
+const READ_TIMEOUT: Duration = Duration::from_secs(6);
+const READ_ATTEMPTS: u8 = 5;
 const READ_REQUEST: [u8; FRAME_LENGTH] = [
     0x13, 0x44, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x58,
+];
+const PSD_REQUEST: [u8; FRAME_LENGTH] = [
+    0x13, 0x05, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x19,
 ];
 
 /// Complete configuration, with frames in sequence order and checksums retained.
@@ -44,7 +80,24 @@ impl WirelessConfig {
     #[must_use]
     pub fn aula_state(&self) -> AulaState {
         AulaState::new(self.lighting(), SleepTimeout::from_wire(self.frames[1][15]))
+            .with_debounce(AulaDebounce::from_wire(self.frames[0][8]))
+            .with_side_light_effect(self.side_light_effect())
     }
+
+    pub(super) fn side_light_effect(&self) -> Option<AulaSideLightEffect> {
+        let (sequence, offset) = side_light_effect_location();
+        AulaSideLightEffect::from_wire(self.frames[sequence][offset])
+    }
+
+    pub(super) fn set_side_light_effect(&mut self, effect: AulaSideLightEffect) {
+        let (sequence, offset) = side_light_effect_location();
+        self.frames[sequence][offset] = effect.wire_value();
+    }
+}
+
+// Verified configuration byte 18 is payload byte 4 of fragment 1.
+const fn side_light_effect_location() -> (usize, usize) {
+    (1, 9)
 }
 
 /// Failure to obtain a complete, validated configuration.
@@ -56,15 +109,36 @@ pub enum ReadError {
     /// Only the verified wireless control collection can be queried.
     #[error("not a verified AULA F87 PRO wireless control collection")]
     UnsupportedCollection,
+    /// This OEM report-carrier diagnostic is not implemented on the current host.
+    #[error("this AULA OEM report-carrier diagnostic is unavailable on the current host")]
+    UnsupportedTransport,
     /// The backend could not open or communicate with the device.
     #[error(transparent)]
     Backend(#[from] BackendError),
     /// The complete transaction exceeded its deadline.
-    #[error("AULA read timed out before all requested fragments arrived")]
+    #[error(
+        "AULA keyboard did not return all requested reports; check that it is awake and paired to this receiver"
+    )]
     Timeout,
     /// A matching configuration response had invalid framing or content.
     #[error("invalid AULA configuration response: {0}")]
     InvalidResponse(&'static str),
+    /// The F87 Fn-layer response geometry differs from the expected matrix.
+    #[error(
+        "invalid AULA Fn matrix fragment: sequence {sequence}, response count {actual_fragments}, payload {actual_payload_length} bytes; expected {expected_fragments} fragments and {expected_payload_length} bytes at this sequence"
+    )]
+    InvalidFnMatrixFragment {
+        /// Zero-based fragment sequence returned by the device.
+        sequence: u8,
+        /// Fragment count returned by the device.
+        actual_fragments: u8,
+        /// Payload length returned by the device.
+        actual_payload_length: u8,
+        /// Expected total fragment count.
+        expected_fragments: usize,
+        /// Expected payload length for this sequence.
+        expected_payload_length: usize,
+    },
 }
 
 /// Read configuration without changing settings.
@@ -85,12 +159,19 @@ pub(crate) async fn read_config(
     ) {
         return Err(ReadError::UnsupportedCollection);
     }
+    let mut phase = "opening the raw HID session";
     tokio::time::timeout(READ_TIMEOUT, async {
+        tracing::debug!("AULA opening selected raw HID session");
         let mut session = backend.open_raw_session(node).await?;
+        tracing::debug!("AULA raw HID session opened");
+        phase = "sending the configuration request and receiving reports";
         read_session(&mut *session).await
     })
     .await
-    .map_err(|_| ReadError::Timeout)?
+    .map_err(|_| {
+        tracing::warn!(phase, "AULA configuration read exceeded its total deadline");
+        ReadError::Timeout
+    })?
 }
 
 async fn read_session(session: &mut dyn RawSession) -> Result<WirelessConfig, ReadError> {
@@ -108,16 +189,68 @@ async fn read_reports(
     request: &[u8; FRAME_LENGTH],
     parse: impl Fn(&[u8]) -> Result<Option<[u8; FRAME_LENGTH]>, ReadError>,
 ) -> Result<Vec<[u8; FRAME_LENGTH]>, ReadError> {
-    let deadline = tokio::time::Instant::now() + READ_TIMEOUT;
-    tokio::time::timeout_at(deadline, async {
-        session.write_output_report(request).await?;
-        let mut fragments: Option<Vec<Option<[u8; FRAME_LENGTH]>>> = None;
+    read_reports_with_retries(session, request, parse).await
+}
+
+/// Retry one idempotent OEM read query up to five times after a response timeout.
+///
+/// Each attempt gets a fresh fragment collector but reuses the same request and
+/// session. Invalid matching data and transport errors fail immediately.
+pub(super) async fn read_reports_with_retries(
+    session: &mut dyn RawSession,
+    request: &[u8; FRAME_LENGTH],
+    parse: impl Fn(&[u8]) -> Result<Option<[u8; FRAME_LENGTH]>, ReadError>,
+) -> Result<Vec<[u8; FRAME_LENGTH]>, ReadError> {
+    for attempt in 0..READ_ATTEMPTS {
+        match read_reports_with_timeout(session, request, &parse, READ_ATTEMPT_TIMEOUT).await {
+            Ok(frames) => return Ok(frames),
+            Err(ReadError::Timeout) if attempt + 1 < READ_ATTEMPTS => {
+                tracing::debug!(
+                    command = request[1],
+                    attempt = attempt + 1,
+                    "retrying timed-out AULA read request"
+                );
+            }
+            Err(ReadError::Timeout) => {
+                tracing::warn!(
+                    command = request[1],
+                    attempts = READ_ATTEMPTS,
+                    "AULA read request exhausted retries"
+                );
+                return Err(ReadError::Timeout);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(ReadError::Timeout)
+}
+
+pub(super) async fn read_reports_with_timeout(
+    session: &mut dyn RawSession,
+    request: &[u8; FRAME_LENGTH],
+    parse: impl Fn(&[u8]) -> Result<Option<[u8; FRAME_LENGTH]>, ReadError>,
+    timeout: Duration,
+) -> Result<Vec<[u8; FRAME_LENGTH]>, ReadError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut accepted_fragments = 0;
+    let result = tokio::time::timeout_at(deadline, async {
+        tracing::debug!(command = request[1], "AULA sending read request");
         let mut buffer = [0; 64];
+        let mut pending_length = Some(session.exchange_output_report(request, &mut buffer).await?);
+        tracing::debug!(
+            command = request[1],
+            "AULA read request sent; collecting fragments"
+        );
+        let mut fragments: Option<Vec<Option<[u8; FRAME_LENGTH]>>> = None;
         loop {
             if tokio::time::Instant::now() >= deadline {
                 return Err(ReadError::Timeout);
             }
-            let length = session.read_input_report(&mut buffer).await?;
+            let length = match pending_length.take() {
+                Some(length) => length,
+                None => session.read_input_report(&mut buffer).await?,
+            };
+            tracing::debug!(command = request[1], length, "AULA input report received");
             if length == 0 {
                 return Err(BackendError::Disconnected.into());
             }
@@ -138,7 +271,15 @@ async fn read_reports(
                 }
             } else {
                 parts[index] = Some(frame);
+                accepted_fragments += 1;
             }
+            tracing::debug!(
+                command = request[1],
+                sequence = index,
+                received = parts.iter().filter(|part| part.is_some()).count(),
+                expected = parts.len(),
+                "AULA read fragment accepted",
+            );
             if parts.iter().all(Option::is_some) {
                 return parts
                     .iter()
@@ -148,8 +289,17 @@ async fn read_reports(
             }
         }
     })
-    .await
-    .map_err(|_| ReadError::Timeout)?
+    .await;
+    if let Ok(result) = result {
+        result
+    } else {
+        tracing::debug!(
+            command = request[1],
+            accepted_fragments,
+            "AULA read attempt timed out"
+        );
+        Err(ReadError::Timeout)
+    }
 }
 
 /// Select one verified keyboard, optionally by exact raw-route identity, and read it.
@@ -160,6 +310,37 @@ pub async fn read_selected_config(
 ) -> Result<WirelessConfig, ReadError> {
     let node = select_node(backend, identity).await?;
     read_config(backend, &node).await
+}
+
+/// Read the six-byte OEM model discriminator from one selected wireless F87 PRO.
+///
+/// This sends only the OEM's `0x13/0x05` identity query and does not alter settings.
+pub async fn read_selected_psd(
+    backend: &dyn HidBackend,
+    identity: Option<&str>,
+) -> Result<[u8; 6], ReadError> {
+    let node = select_node(backend, identity).await?;
+    tokio::time::timeout(READ_TIMEOUT, async {
+        let mut session = backend.open_raw_session(&node).await?;
+        read_session_psd(&mut *session).await
+    })
+    .await
+    .map_err(|_| ReadError::Timeout)?
+}
+
+pub(super) async fn read_session_psd(session: &mut dyn RawSession) -> Result<[u8; 6], ReadError> {
+    let frames = read_reports_with_retries(session, &PSD_REQUEST, psd_frame).await?;
+    let mut psd = Vec::with_capacity(6);
+    for frame in frames {
+        let length = usize::from(frame[4]);
+        psd.extend_from_slice(&frame[5..5 + length]);
+        if psd.len() >= 6 {
+            break;
+        }
+    }
+    psd.get(..6)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(ReadError::InvalidResponse("short OEM model discriminator"))
 }
 
 /// Resolve one verified control collection, rejecting ambiguous routes before I/O.
@@ -201,7 +382,7 @@ pub async fn select_node(
 }
 
 fn config_frame(report: &[u8]) -> Result<Option<[u8; FRAME_LENGTH]>, ReadError> {
-    let Some(frame) = validated_frame(report, 0x44, FRAGMENT_COUNT)? else {
+    let Some(frame) = validated_frame(report, 0x13, 0x44, FRAGMENT_COUNT)? else {
         return Ok(None);
     };
     if usize::from(frame[2]) != FRAGMENT_COUNT {
@@ -218,6 +399,28 @@ fn config_frame(report: &[u8]) -> Result<Option<[u8; FRAME_LENGTH]>, ReadError> 
     if frame[3] == 9 && frame[5..7] != [0x5a, 0xa5] {
         return Err(ReadError::InvalidResponse(
             "missing configuration terminator",
+        ));
+    }
+    Ok(Some(frame))
+}
+
+fn psd_frame(report: &[u8]) -> Result<Option<[u8; FRAME_LENGTH]>, ReadError> {
+    if !report.starts_with(&[0x13, 0x05]) {
+        tracing::trace!(
+            report_id = ?report.first(),
+            command = ?report.get(1),
+            length = report.len(),
+            "ignoring unrelated report during OEM model query"
+        );
+        return Ok(None);
+    }
+    let Some(frame) = validated_frame(report, 0x13, 0x05, 6)? else {
+        return Ok(None);
+    };
+    let length = usize::from(frame[4]);
+    if !(1..=14).contains(&length) {
+        return Err(ReadError::InvalidResponse(
+            "invalid OEM discriminator fragment length",
         ));
     }
     Ok(Some(frame))
@@ -247,10 +450,11 @@ fn validate_ordered_frames(
 // Framing and allocation bounds are shared by every wireless read opcode.
 fn validated_frame(
     report: &[u8],
+    report_id: u8,
     command: u8,
     maximum: usize,
 ) -> Result<Option<[u8; FRAME_LENGTH]>, ReadError> {
-    if !report.starts_with(&[0x13, command]) {
+    if !report.starts_with(&[report_id, command]) {
         return Ok(None);
     }
     let frame: [u8; FRAME_LENGTH] = report

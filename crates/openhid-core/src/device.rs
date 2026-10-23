@@ -603,6 +603,11 @@ pub struct StandaloneDevice {
     /// append-only GUI↔agent bincode wire format.
     #[serde(default)]
     pub registry_model_id: Option<String>,
+    /// Latest generic battery reading, when the driver can read one.
+    ///
+    /// Appended to preserve the standalone inventory's wire history.
+    #[serde(default)]
+    pub battery: Option<BatteryInfo>,
 }
 
 impl StandaloneDevice {

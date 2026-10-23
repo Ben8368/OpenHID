@@ -1037,6 +1037,92 @@ impl Agent for MockAgent {
         Err(WriteError::DeviceNotFound)
     }
 
+    async fn set_aula_per_key_rgb(
+        self,
+        _: Context,
+        _route: DeviceRoute,
+        _: openhid_core::hid::aula::AulaPerKeyRgb,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
+    async fn read_aula_keymap(
+        self,
+        _: Context,
+        _: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
+    async fn set_aula_keymap(
+        self,
+        _: Context,
+        _: DeviceRoute,
+        _: openhid_core::hid::aula::AulaKeymap,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
+    async fn set_aula_keymap_if_unchanged(
+        self,
+        _: Context,
+        _: DeviceRoute,
+        _: openhid_core::hid::aula::AulaKeymap,
+        _: openhid_core::hid::aula::AulaKeymap,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
+    async fn read_aula_base_matrix(
+        self,
+        _: Context,
+        _: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaBaseMatrix, WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
+    async fn read_aula_macro_prefix(
+        self,
+        _: Context,
+        _: DeviceRoute,
+    ) -> Result<Vec<u8>, WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
+    async fn read_aula_macro_table_candidate(
+        self,
+        _: Context,
+        _: DeviceRoute,
+    ) -> Result<Vec<Vec<u8>>, WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
+    async fn read_aula_wired_config(
+        self,
+        _: Context,
+        _: DeviceRoute,
+    ) -> Result<Vec<u8>, WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
+    async fn set_aula_wired_config(
+        self,
+        _: Context,
+        _: DeviceRoute,
+        _: Vec<u8>,
+    ) -> Result<Vec<u8>, WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
+    async fn set_aula_wired_keymap(
+        self,
+        _: Context,
+        _: DeviceRoute,
+        _: Vec<u8>,
+    ) -> Result<(), WriteError> {
+        Err(WriteError::DeviceNotFound)
+    }
+
     /// The mock reports no changes on its lights, so it has none to keep.
     async fn reload_saved_config(
         self,

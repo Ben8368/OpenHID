@@ -24,6 +24,7 @@ use std::{env, fs};
 fn main() {
     println!("cargo:rerun-if-env-changed=OPENHID_UPDATE_MANIFEST_URL");
     println!("cargo:rerun-if-env-changed=OPENHID_THEMES_DIR");
+    configure_windows_debug_stack_reserve();
 
     // `rust_i18n::i18n!` in `main.rs` reads `../openhid-ui/locales` at macro
     // expansion time, and Cargo does not track a proc macro's file reads. Without
@@ -56,6 +57,28 @@ fn main() {
     }
     generated.push_str("];\n");
     fs::write(out.join("builtin_themes.rs"), generated).expect("write builtin_themes.rs");
+}
+
+/// Reserve enough Windows debug stack for the generated locale initializer.
+///
+/// The generated `rust-i18n` backend currently has a measured 1.17 MiB stack
+/// frame in debug builds, exceeding Windows' 1 MiB default. Release builds do
+/// not reproduce the overflow. Keep this development-only linker setting on
+/// the desktop executable instead of changing stack sizes for the agent, CLI,
+/// or packaged release app.
+fn configure_windows_debug_stack_reserve() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows")
+        || env::var("PROFILE").as_deref() != Ok("debug")
+    {
+        return;
+    }
+
+    let linker_argument = match env::var("CARGO_CFG_TARGET_ENV").as_deref() {
+        Ok("msvc") => "/STACK:4194304",
+        Ok("gnu") => "-Wl,--stack,4194304",
+        _ => return,
+    };
+    println!("cargo:rustc-link-arg-bin=openhid-desktop={linker_argument}");
 }
 
 /// Embed the Windows exe resources — the app icon and a VERSIONINFO block —

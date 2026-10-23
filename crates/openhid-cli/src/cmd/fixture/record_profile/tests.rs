@@ -109,6 +109,83 @@ impl TestAgent {
     reason = "the in-process IPC service intentionally returns immediate scripted values"
 )]
 impl Agent for TestAgent {
+    async fn read_aula_keymap(
+        self,
+        _: TarpcContext,
+        _: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError> {
+        unreachable!("fixture recording does not access AULA keymaps")
+    }
+
+    async fn set_aula_keymap(
+        self,
+        _: TarpcContext,
+        _: DeviceRoute,
+        _: openhid_core::hid::aula::AulaKeymap,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError> {
+        unreachable!("fixture recording must never write AULA keymaps")
+    }
+
+    async fn set_aula_keymap_if_unchanged(
+        self,
+        _: TarpcContext,
+        _: DeviceRoute,
+        _: openhid_core::hid::aula::AulaKeymap,
+        _: openhid_core::hid::aula::AulaKeymap,
+    ) -> Result<openhid_core::hid::aula::AulaKeymap, WriteError> {
+        unreachable!("fixture recording must never write AULA keymaps")
+    }
+
+    async fn read_aula_base_matrix(
+        self,
+        _: TarpcContext,
+        _: DeviceRoute,
+    ) -> Result<openhid_core::hid::aula::AulaBaseMatrix, WriteError> {
+        unreachable!("fixture recording does not access AULA keymaps")
+    }
+
+    async fn read_aula_macro_prefix(
+        self,
+        _: TarpcContext,
+        _: DeviceRoute,
+    ) -> Result<Vec<u8>, WriteError> {
+        unreachable!("fixture recording does not access AULA macro memory")
+    }
+
+    async fn read_aula_macro_table_candidate(
+        self,
+        _: TarpcContext,
+        _: DeviceRoute,
+    ) -> Result<Vec<Vec<u8>>, WriteError> {
+        unreachable!("fixture recording does not access AULA macro memory")
+    }
+
+    async fn read_aula_wired_config(
+        self,
+        _: TarpcContext,
+        _: DeviceRoute,
+    ) -> Result<Vec<u8>, WriteError> {
+        unreachable!("fixture recording does not access wired AULA config")
+    }
+
+    async fn set_aula_wired_config(
+        self,
+        _: TarpcContext,
+        _: DeviceRoute,
+        _: Vec<u8>,
+    ) -> Result<Vec<u8>, WriteError> {
+        unreachable!("fixture recording must never write wired AULA config")
+    }
+
+    async fn set_aula_wired_keymap(
+        self,
+        _: TarpcContext,
+        _: DeviceRoute,
+        _: Vec<u8>,
+    ) -> Result<(), WriteError> {
+        unreachable!("fixture recording must never write a wired AULA keymap")
+    }
+
     async fn read_aula_lighting(
         self,
         _: TarpcContext,
@@ -143,6 +220,15 @@ impl Agent for TestAgent {
         _: openhid_core::hid::aula::LightingMode,
     ) -> Result<openhid_core::hid::aula::LightingState, WriteError> {
         unreachable!("profile capture must never write AULA configuration")
+    }
+
+    async fn set_aula_per_key_rgb(
+        self,
+        _: TarpcContext,
+        _: DeviceRoute,
+        _: openhid_core::hid::aula::AulaPerKeyRgb,
+    ) -> Result<openhid_core::hid::aula::AulaState, WriteError> {
+        unreachable!("profile capture must never write AULA RGB settings")
     }
 
     async fn protocol_version(self, _: TarpcContext) -> u32 {

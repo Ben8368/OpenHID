@@ -340,6 +340,7 @@ fn standalone_registry_identity_is_preserved_without_hidpp_model_info() {
         light_capabilities: None,
         driver_id: "litra".into(),
         registry_model_id: Some("8c901".into()),
+        battery: None,
     };
     let list = build_device_list(
         &[],

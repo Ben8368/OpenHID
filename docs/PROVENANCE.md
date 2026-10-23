@@ -31,6 +31,12 @@ are upstream history, not OpenHID releases.
 - Imported skills retain their original licenses and `skills-lock.json`.
 - External dependencies keep their published identities, including
   `openlogi-async-hid`. Renaming this project does not rename that dependency.
+- `crates/openhid-core/assets/aula/wired-keymap-{base,fn}.bin` are the 520-byte
+  factory-layer templates from `vndarkblue/aula-keybind` at
+  `d45213a56bc72308019eb3254b34650fc2a95356`, used under its MIT license.
+  Their SHA-256 hashes are recorded in the device support notes. The upstream
+  license is retained at
+  [`third-party/licenses/aula-keybind-MIT.txt`](../third-party/licenses/aula-keybind-MIT.txt).
 - The OpenLogi brand artwork has been replaced by original OpenHID artwork.
   [The original brand notice](upstream/OpenLogi-brand-LICENSE.txt) is retained
   as a record; it grants no permission to use those original assets.

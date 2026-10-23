@@ -1,0 +1,12 @@
+# `read_reports_with_retries` owns bounded retries for ordinary AULA read queries.
+# The macro prefix collector is a separate full-stream operation with its own deadline.
+id: device-aula-read-retry-owner
+language: rust
+severity: error
+message: Use the shared AULA read retry owner; call the one-attempt collector only from its owner or the macro-prefix collector.
+files:
+  - crates/openhid-device/src/aula/**/*.rs
+ignores:
+  - crates/openhid-device/src/aula/macros.rs
+rule:
+  pattern: read_reports_with_timeout($SESSION, $$$ARGS)

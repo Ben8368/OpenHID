@@ -449,6 +449,107 @@ fn change() -> LightingChange {
     LightingChange::new(Some(1), Some(2), Some(2)).unwrap()
 }
 
+fn custom_effect_capture() -> [[u8; 20]; 10] {
+    let mut frames = CAPTURE;
+    frames[0][8] = 1;
+    frames[0][14] = 0;
+    frames[0][15] = 21;
+    frames[0][17] = 1;
+    for frame in &mut frames {
+        checksum(frame);
+    }
+    frames
+}
+
+fn per_key_colors() -> AulaPerKeyRgb {
+    AulaPerKeyRgb::new(
+        (0..openhid_core::hid::aula::AULA_PER_KEY_LED_COUNT)
+            .map(|index| {
+                let led = u8::try_from(index).unwrap();
+                AulaRgb::new(led, led.wrapping_add(1), led.wrapping_add(2))
+            })
+            .collect(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn per_key_apply_selects_custom_mode_before_table_and_saves_verified_config() {
+    let target = custom_effect_capture();
+    let reports = per_key::encode_wireless_per_key_frames(&per_key_colors());
+    let expected_reports = reports.map(Vec::from);
+    let mut incoming = CAPTURE.map(Vec::from).to_vec();
+    incoming.extend(echoed_frames(&target));
+    incoming.extend(target.map(Vec::from));
+    incoming.extend(expected_reports.iter().cloned());
+    incoming.push(save_echo());
+    incoming.extend(target.map(Vec::from));
+    let backend = Backend::new(incoming);
+
+    let state = apply_selected_per_key_rgb(&backend, None, &per_key_colors(), || false)
+        .await
+        .unwrap();
+
+    assert_eq!(state.lighting.effect, 21);
+    let writes = backend.evidence.writes.lock().unwrap();
+    assert_eq!(writes.len(), 42);
+    assert_eq!(writes[0][1], 0x44, "the complete baseline is read first");
+    assert_eq!(&writes[1..11], echoed_frames(&target));
+    assert_eq!(writes[11][1], 0x44, "full config readback follows staging");
+    assert_eq!(
+        &writes[12..40],
+        expected_reports.as_slice(),
+        "custom mode is staged before the 28 color frames"
+    );
+    assert_eq!(writes[40], save_echo());
+    assert_eq!(writes[41][1], 0x44, "full config readback follows SAVE");
+}
+
+#[tokio::test]
+async fn per_key_apply_refuses_to_replace_an_active_custom_table() {
+    let current = custom_effect_capture();
+    let backend = Backend::new(current.map(Vec::from));
+    assert!(matches!(
+        apply_selected_per_key_rgb(&backend, None, &per_key_colors(), || false).await,
+        Err(PerKeyRgbError::CustomEffectAlreadyActive)
+    ));
+    assert_eq!(
+        backend.evidence.writes.lock().unwrap().len(),
+        1,
+        "only the read request was sent"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn per_key_partial_failure_does_not_claim_unverified_configuration_recovery() {
+    let frames = per_key::encode_wireless_per_key_frames(&per_key_colors());
+    let mut incoming = CAPTURE.map(Vec::from).to_vec();
+    let target = custom_effect_capture();
+    incoming.extend(echoed_frames(&target));
+    incoming.extend(target.map(Vec::from));
+    incoming.extend(frames[..2].iter().map(|frame| frame.to_vec()));
+    let backend = Backend::new(incoming);
+
+    assert!(matches!(
+        apply_selected_per_key_rgb(&backend, None, &per_key_colors(), || false).await,
+        Err(PerKeyRgbError::RecoveryFailed { cause, .. })
+            if matches!(*cause, PerKeyRgbError::PartialWrite {
+                completed_reports: 2,
+                failed_sequence: 2,
+                ..
+            })
+    ));
+    let writes = backend.evidence.writes.lock().unwrap();
+    assert_eq!(
+        writes[12..15]
+            .iter()
+            .map(|frame| frame[1])
+            .collect::<Vec<_>>(),
+        [2, 2, 2]
+    );
+    assert!(writes[15..].iter().all(|frame| frame[1] == 0x04));
+}
+
 #[test]
 fn aula_state_decodes_verified_sleep_timeout_and_preserves_unknown_values() {
     let config = WirelessConfig::from_frames(CAPTURE).unwrap();
@@ -508,7 +609,8 @@ async fn lighting_apply_preserves_unknown_bytes_and_verifies_full_readback_witho
         LightingState {
             effect: 1,
             brightness: Some(2),
-            speed: Some(2)
+            speed: Some(2),
+            color_mode: None,
         }
     );
     let writes = backend.evidence.writes.lock().unwrap();

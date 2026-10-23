@@ -9,6 +9,7 @@
 //! Channel-addressed operations (the `_on` family) need no backend and are not
 //! wrapped: they act on a channel the caller already holds.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use openhid_core::device::{DeviceInventory, LightState, StandaloneDevice};
@@ -316,14 +317,8 @@ pub async fn start_aula_lighting_on(
     change: openhid_device::aula::LightingChange,
     mode: openhid_device::aula::LightingMode,
 ) -> Result<crate::lighting::LightingJob<openhid_device::aula::ConfigResult>, WriteError> {
-    start_aula_config_on(
-        backend,
-        device_io,
-        identity,
-        openhid_device::aula::ConfigChange::Lighting(change),
-        mode,
-    )
-    .await
+    let change = openhid_device::aula::ConfigChange::Lighting(change);
+    start_aula_config_on(backend, device_io, identity, change, mode).await
 }
 
 /// Start a recoverable edit of the verified F87 PRO settings.
@@ -369,6 +364,101 @@ pub async fn start_aula_restore(
     .await
 }
 
+/// Start a complete wireless per-key RGB table operation in the owned lighting worker.
+pub async fn start_aula_per_key_rgb(
+    identity: Option<&str>,
+    colors: openhid_core::hid::aula::AulaPerKeyRgb,
+) -> Result<crate::lighting::LightingJob<openhid_core::hid::aula::AulaState>, WriteError> {
+    start_aula_per_key_rgb_on(native_backend(), device_io_gate(), identity, colors).await
+}
+
+/// Start per-key RGB over an injected backend, retaining the route lock through completion.
+pub async fn start_aula_per_key_rgb_on(
+    backend: Arc<dyn openhid_device::backend::HidBackend>,
+    device_io: DeviceIoGate,
+    identity: Option<&str>,
+    colors: openhid_core::hid::aula::AulaPerKeyRgb,
+) -> Result<crate::lighting::LightingJob<openhid_core::hid::aula::AulaState>, WriteError> {
+    let operation_backend = Arc::clone(&backend);
+    start_aula_worker_on(
+        backend,
+        device_io,
+        identity,
+        move |identity, cancel| async move {
+            openhid_device::aula::apply_selected_per_key_rgb(
+                &*operation_backend,
+                Some(&identity),
+                &colors,
+                || cancel.is_cancelled(),
+            )
+            .await
+            .map_err(|error| WriteError::Hid(error.to_string()))
+        },
+    )
+    .await
+}
+
+/// Start a complete wireless keymap write in the owned worker with recovery.
+pub async fn start_aula_keymap_on(
+    backend: Arc<dyn openhid_device::backend::HidBackend>,
+    device_io: DeviceIoGate,
+    identity: Option<&str>,
+    keymap: openhid_core::hid::aula::AulaKeymap,
+) -> Result<crate::lighting::LightingJob<openhid_core::hid::aula::AulaKeymap>, WriteError> {
+    start_aula_keymap_with_expected_on(backend, device_io, identity, None, keymap).await
+}
+
+/// Start a wireless keymap write after checking the caller's loaded snapshot.
+pub async fn start_aula_keymap_if_unchanged_on(
+    backend: Arc<dyn openhid_device::backend::HidBackend>,
+    device_io: DeviceIoGate,
+    identity: Option<&str>,
+    expected: openhid_core::hid::aula::AulaKeymap,
+    keymap: openhid_core::hid::aula::AulaKeymap,
+) -> Result<crate::lighting::LightingJob<openhid_core::hid::aula::AulaKeymap>, WriteError> {
+    start_aula_keymap_with_expected_on(backend, device_io, identity, Some(expected), keymap).await
+}
+
+async fn start_aula_keymap_with_expected_on(
+    backend: Arc<dyn openhid_device::backend::HidBackend>,
+    device_io: DeviceIoGate,
+    identity: Option<&str>,
+    expected: Option<openhid_core::hid::aula::AulaKeymap>,
+    keymap: openhid_core::hid::aula::AulaKeymap,
+) -> Result<crate::lighting::LightingJob<openhid_core::hid::aula::AulaKeymap>, WriteError> {
+    let operation_backend = Arc::clone(&backend);
+    start_aula_worker_on(
+        backend,
+        device_io,
+        identity,
+        move |identity, cancel| async move {
+            match expected {
+                Some(expected) => {
+                    openhid_device::aula::update_selected_keymap_if_unchanged(
+                        &*operation_backend,
+                        Some(&identity),
+                        expected,
+                        keymap,
+                        || cancel.is_cancelled(),
+                    )
+                    .await
+                }
+                None => {
+                    openhid_device::aula::update_selected_keymap(
+                        &*operation_backend,
+                        Some(&identity),
+                        keymap,
+                        || cancel.is_cancelled(),
+                    )
+                    .await
+                }
+            }
+            .map_err(|error| WriteError::Hid(error.to_string()))
+        },
+    )
+    .await
+}
+
 async fn start_aula_config_on(
     backend: Arc<dyn openhid_device::backend::HidBackend>,
     device_io: DeviceIoGate,
@@ -376,6 +466,38 @@ async fn start_aula_config_on(
     change: openhid_device::aula::ConfigChange,
     mode: openhid_device::aula::LightingMode,
 ) -> Result<crate::lighting::LightingJob<openhid_device::aula::ConfigResult>, WriteError> {
+    let operation_backend = Arc::clone(&backend);
+    start_aula_worker_on(
+        backend,
+        device_io,
+        identity,
+        move |identity, cancel| async move {
+            openhid_device::aula::update_config(
+                &*operation_backend,
+                Some(&identity),
+                change,
+                mode,
+                || cancel.is_cancelled(),
+            )
+            .await
+            .map_err(|error| WriteError::Hid(error.to_string()))
+        },
+    )
+    .await
+}
+
+async fn start_aula_worker_on<T, Operation, OperationFuture>(
+    backend: Arc<dyn openhid_device::backend::HidBackend>,
+    device_io: DeviceIoGate,
+    identity: Option<&str>,
+    operation: Operation,
+) -> Result<crate::lighting::LightingJob<T>, WriteError>
+where
+    T: Send + 'static,
+    Operation:
+        FnOnce(String, crate::lighting::LightingCancellation) -> OperationFuture + Send + 'static,
+    OperationFuture: Future<Output = Result<T, WriteError>> + Send + 'static,
+{
     device_io
         .ensure_allowed()
         .map_err(|_| WriteError::DeviceNotFound)?;
@@ -388,18 +510,14 @@ async fn start_aula_config_on(
         product_id: node.product_id,
         usage_page: node.usage_page,
         usage_id: node.usage_id,
-        identity: identity.clone(),
+        identity,
     };
     let route = DeviceRoute::from(&address);
     crate::lighting::LightingJob::spawn(&route, move |cancel| async move {
         device_io
             .ensure_allowed()
             .map_err(|_| WriteError::DeviceNotFound)?;
-        openhid_device::aula::update_config(&*backend, Some(&identity), change, mode, || {
-            cancel.is_cancelled()
-        })
-        .await
-        .map_err(|error| WriteError::Hid(error.to_string()))
+        operation(address.identity, cancel).await
     })
 }
 
@@ -411,6 +529,65 @@ pub async fn read_aula_config(
     openhid_device::aula::read_selected_config(&*native_backend(), identity).await
 }
 
+/// Read the six-byte OEM model discriminator from one wireless F87 PRO without changing settings.
+pub async fn read_aula_psd(
+    identity: Option<&str>,
+) -> Result<[u8; 6], openhid_device::aula::ReadError> {
+    openhid_device::aula::read_selected_psd(&*native_backend(), identity).await
+}
+
+/// Read the F87-family wired model response using Feature Report `0x06/0x82`.
+pub async fn read_aula_wired_model_probe(
+    identity: Option<&str>,
+) -> Result<openhid_device::aula::WiredModelProbe, openhid_device::aula::WiredProbeError> {
+    openhid_device::aula::read_wired_model_probe(&*native_backend(), identity).await
+}
+
+/// Read one complete, validated wired F87 Pro configuration block.
+pub async fn read_aula_wired_config(
+    identity: Option<&str>,
+) -> Result<openhid_device::aula::WiredConfigBlock, openhid_device::aula::WiredConfigReadError> {
+    openhid_device::aula::read_wired_config(&*native_backend(), identity).await
+}
+
+/// Experimentally read the opaque wired F87 Pro macro-table candidate without writing macro data.
+pub async fn read_aula_wired_macro_table(
+    identity: Option<&str>,
+) -> Result<openhid_device::aula::WiredMacroTable, openhid_device::aula::WiredMacroReadError> {
+    openhid_device::aula::read_wired_macro_table(&*native_backend(), identity).await
+}
+
+/// Experimentally replace a complete wired F87 Pro macro-table candidate after a persisted backup.
+pub async fn write_aula_wired_macro_table(
+    identity: Option<&str>,
+    expected_original: &openhid_device::aula::WiredMacroTable,
+    target: &openhid_device::aula::WiredMacroTable,
+) -> Result<(), openhid_device::aula::WiredMacroWriteError> {
+    openhid_device::aula::write_wired_macro_table(
+        &*native_backend(),
+        identity,
+        expected_original,
+        target,
+    )
+    .await
+}
+
+/// Replace and verify one complete wired F87 Pro configuration block.
+pub async fn write_aula_wired_config(
+    identity: Option<&str>,
+    block: &openhid_device::aula::WiredConfigBlock,
+) -> Result<openhid_device::aula::WiredConfigBlock, openhid_device::aula::WiredConfigWriteError> {
+    openhid_device::aula::write_wired_config(&*native_backend(), identity, block).await
+}
+
+/// Upload one validated wired F87-family keymap layer to an exact collection identity.
+pub async fn write_aula_wired_keymap(
+    identity: Option<&str>,
+    blob: &openhid_core::hid::aula::AulaWiredKeymapBlob,
+) -> Result<(), openhid_device::aula::WiredKeymapWriteError> {
+    openhid_device::aula::write_wired_keymap(&*native_backend(), identity, blob).await
+}
+
 /// Experimental read of raw F87 PRO wireless matrix entries; never writes assignments.
 pub async fn read_aula_matrix(
     identity: Option<&str>,
@@ -418,11 +595,60 @@ pub async fn read_aula_matrix(
     openhid_device::aula::read_selected_matrix(&*native_backend(), identity).await
 }
 
+/// Read the F87 PRO base matrix with the OEM's unadvertised `0x15` request carrier.
+/// This read-only diagnostic tests Linux hidraw and Windows raw-HID report-ID delivery.
+pub async fn read_aula_matrix_oem_carrier(
+    identity: Option<&str>,
+) -> Result<openhid_device::aula::WirelessMatrix, openhid_device::aula::ReadError> {
+    ensure_aula_oem_raw_report_transport()?;
+    openhid_device::aula::read_selected_matrix_with_oem_carrier(&*native_backend(), identity).await
+}
+
+/// Read both keymap layers through the OEM's unadvertised `0x15` carrier.
+/// This diagnostic is read-only and does not prove that the keyboard accepts the reports.
+pub async fn read_aula_keymap_oem_carrier(
+    identity: Option<&str>,
+) -> Result<openhid_core::hid::aula::AulaKeymap, openhid_device::aula::ReadError> {
+    ensure_aula_oem_raw_report_transport()?;
+    openhid_device::aula::read_selected_keymap_with_oem_carrier(&*native_backend(), identity).await
+}
+
+/// Read both raw F87 PRO wireless keymap layers without changing the device.
+pub async fn read_aula_keymap(
+    identity: Option<&str>,
+) -> Result<openhid_core::hid::aula::AulaKeymap, openhid_device::aula::ReadError> {
+    openhid_device::aula::read_selected_keymap(&*native_backend(), identity).await
+}
+
+fn ensure_aula_oem_raw_report_transport() -> Result<(), openhid_device::aula::ReadError> {
+    if cfg!(any(target_os = "linux", target_os = "windows")) {
+        Ok(())
+    } else {
+        Err(openhid_device::aula::ReadError::UnsupportedTransport)
+    }
+}
+
+/// Read the validated 126-entry F87 PRO wireless base matrix through the host backend.
+pub async fn read_aula_base_matrix(
+    identity: Option<&str>,
+) -> Result<openhid_core::hid::aula::AulaBaseMatrix, openhid_device::aula::ReadError> {
+    openhid_device::aula::read_selected_base_matrix(&*native_backend(), identity).await
+}
+
+/// Apply and verify a complete F87 PRO keymap, restoring the snapshot on failure.
+pub async fn update_aula_keymap(
+    identity: Option<&str>,
+    target: openhid_core::hid::aula::AulaKeymap,
+) -> Result<openhid_core::hid::aula::AulaKeymap, openhid_device::aula::KeymapWriteError> {
+    openhid_device::aula::update_selected_keymap(&*native_backend(), identity, target, || false)
+        .await
+}
+
 /// Read the currently supported F87 PRO settings without writing.
 pub async fn read_aula_state(
     identity: Option<&str>,
 ) -> Result<openhid_device::aula::AulaState, openhid_device::aula::ReadError> {
-    Ok(read_aula_config(identity).await?.aula_state())
+    openhid_device::aula::read_selected_state(&*native_backend(), identity).await
 }
 
 /// Subscribe to this host's HID hotplug events.

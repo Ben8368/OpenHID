@@ -164,6 +164,42 @@ pub trait RawSession: RawWriter {
     /// Read one complete input report, including its report ID.
     /// A zero length means the device disconnected.
     async fn read_input_report(&mut self, buffer: &mut [u8]) -> Result<usize, BackendError>;
+
+    /// Arm the next input read before writing a request that may reply quickly.
+    ///
+    /// Backends with independently owned input/output handles should override
+    /// this to start both operations concurrently. The default preserves the
+    /// simpler sequential behavior for scripted sessions.
+    async fn exchange_output_report(
+        &mut self,
+        report: &[u8],
+        input: &mut [u8],
+    ) -> Result<usize, BackendError> {
+        self.write_output_report(report).await?;
+        self.read_input_report(input).await
+    }
+}
+
+/// A bidirectional HID Feature Report connection.
+///
+/// Reports passed to these methods include the report ID as their first byte.
+/// This is separate from [`RawSession`]: feature reports use the HID control
+/// transfer path and are not output reports written to the device's raw stream.
+#[expect(
+    clippy::allow_attributes,
+    reason = "async_trait expands double_must_use"
+)]
+#[allow(
+    clippy::double_must_use,
+    reason = "lint originates in async_trait expansion"
+)]
+#[async_trait]
+pub trait FeatureSession: Send + Sync {
+    /// Read one Feature Report into `buffer`; the first byte must contain its report ID.
+    async fn read_feature_report(&mut self, buffer: &mut [u8]) -> Result<usize, BackendError>;
+
+    /// Write one complete Feature Report, including its report ID byte.
+    async fn write_feature_report(&mut self, report: &[u8]) -> Result<(), BackendError>;
 }
 
 /// The HID stack beneath OpenHID's HID++ layer.
@@ -211,6 +247,18 @@ pub trait HidBackend: Send + Sync {
 
     /// Open a bidirectional raw-report connection to an enumerated collection.
     async fn open_raw_session(&self, node: &NodeInfo) -> Result<Box<dyn RawSession>, BackendError>;
+
+    /// Open a bidirectional Feature Report connection to an enumerated collection.
+    ///
+    /// Backends without Feature Report support may retain the default error.
+    async fn open_feature_session(
+        &self,
+        _node: &NodeInfo,
+    ) -> Result<Box<dyn FeatureSession>, BackendError> {
+        Err(BackendError::Backend(
+            "HID Feature Reports are unsupported by this backend".into(),
+        ))
+    }
 
     /// Subscribe to node connect/disconnect events.
     fn watch(&self) -> Result<HotplugStream, BackendError>;

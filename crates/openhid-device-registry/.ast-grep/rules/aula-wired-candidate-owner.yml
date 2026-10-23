@@ -1,0 +1,17 @@
+# Owner: openhid_device_registry::aula::matches_wired_candidate owns the
+# 258A:010C wired-candidate identity. Probe and route consumers call it.
+id: aula-wired-candidate-owner
+language: rust
+severity: error
+message: Use openhid_device_registry::aula::matches_wired_candidate; the wired AULA candidate VID/PID belongs to the device registry.
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/openhid-device-registry/src/aula.rs
+  - "**/tests.rs"
+  - "**/tests/**"
+  - "**/*_tests.rs"
+rule:
+  all:
+    - kind: integer_literal
+    - regex: '^(0x258a|9738|0x010c|268)$'

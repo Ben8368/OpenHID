@@ -7,6 +7,7 @@ fn unknown_effect_requires_explicit_selection_before_writing() {
         effect: 21,
         brightness: None,
         speed: None,
+        color_mode: None,
     });
     assert!(editor.change().is_none());
     editor.select_effect(12);
@@ -23,6 +24,7 @@ fn switching_effect_preserves_its_device_parameters_until_explicitly_changed() {
         effect: 12,
         brightness: Some(3),
         speed: Some(4),
+        color_mode: None,
     });
     editor.select_effect(1);
     assert_eq!(editor.change().unwrap().brightness(), None);
@@ -38,14 +40,15 @@ fn switching_effect_preserves_its_device_parameters_until_explicitly_changed() {
 
 use crate::services::{assets::AssetResolver, ipc::Command};
 use crate::state::{AgentLink, Sources};
-use gpui::{AppContext as _, Entity, TestAppContext};
+use gpui::{Entity, TestAppContext};
 use openhid_core::device::{DeviceKind, RawDeviceAddress, StandaloneDevice};
 use openhid_ipc::{AgentStatus, InventoryHealth, PROTOCOL_VERSION};
 use tokio::sync::mpsc;
 
 fn setup(cx: &mut TestAppContext) -> (Entity<AulaLightingPanel>, mpsc::UnboundedReceiver<Command>) {
     let (commands, received) = mpsc::unbounded_channel();
-    let panel = cx.update(|cx| {
+    let cx = cx.add_empty_window();
+    let panel = cx.update(|window, cx| {
         gpui_component::init(cx);
         theme::register_builtin_themes(cx);
         let keyboards: Vec<_> = ["a", "b"]
@@ -68,6 +71,7 @@ fn setup(cx: &mut TestAppContext) -> (Entity<AulaLightingPanel>, mpsc::Unbounded
                 light_capabilities: None,
                 driver_id: "aula-f87-pro-wireless".into(),
                 registry_model_id: None,
+                battery: None,
             })
             .collect();
         let resolver = AssetResolver::new();
@@ -93,7 +97,7 @@ fn setup(cx: &mut TestAppContext) -> (Entity<AulaLightingPanel>, mpsc::Unbounded
             state
         });
         AppState::set_global(state, cx);
-        cx.new(AulaLightingPanel::new)
+        cx.new(|cx| AulaLightingPanel::new(window, cx))
     });
     (panel, received)
 }
@@ -126,6 +130,7 @@ fn aula_reselecting_the_same_route_discards_the_previous_read(cx: &mut TestAppCo
                 effect: 12,
                 brightness: Some(3),
                 speed: Some(4),
+                color_mode: None,
             },
             SleepTimeout::from_seconds(300),
         )))
@@ -150,6 +155,7 @@ fn aula_reselecting_the_same_route_discards_the_previous_read(cx: &mut TestAppCo
                 effect: 1,
                 brightness: Some(1),
                 speed: Some(4),
+                color_mode: None,
             },
             SleepTimeout::from_seconds(300),
         )))
@@ -170,6 +176,7 @@ fn aula_failed_writes_require_refresh_and_pending_requests_block_duplicates(
                 effect: 12,
                 brightness: Some(3),
                 speed: Some(4),
+                color_mode: None,
             },
             SleepTimeout::from_seconds(300),
         )))
@@ -211,6 +218,7 @@ fn aula_failed_writes_require_refresh_and_pending_requests_block_duplicates(
                 effect: 12,
                 brightness: Some(3),
                 speed: Some(4),
+                color_mode: None,
             },
             SleepTimeout::from_seconds(300),
         )))
@@ -242,6 +250,7 @@ fn aula_save_button_uses_verified_agent_state_and_disables_while_busy(cx: &mut T
                 effect: 12,
                 brightness: Some(3),
                 speed: Some(4),
+                color_mode: None,
             },
             SleepTimeout::from_seconds(300),
         )))
@@ -271,6 +280,7 @@ fn aula_save_button_uses_verified_agent_state_and_disables_while_busy(cx: &mut T
                 effect: 1,
                 brightness: Some(2),
                 speed: Some(4),
+                color_mode: None,
             },
             SleepTimeout::from_seconds(300),
         )))
@@ -290,14 +300,18 @@ fn aula_save_button_uses_verified_agent_state_and_disables_while_busy(cx: &mut T
 #[test]
 fn sleep_only_edit_preserves_custom_lighting_and_accepts_unknown_current_timeout() {
     let mut editor = Editor::default();
-    editor.received_settings(AulaState::new(
-        LightingState {
-            effect: 21,
-            brightness: None,
-            speed: None,
-        },
-        None,
-    ));
+    editor.received_settings(
+        AulaState::new(
+            LightingState {
+                effect: 21,
+                brightness: None,
+                speed: None,
+                color_mode: None,
+            },
+            None,
+        ),
+        false,
+    );
     assert!(editor.settings_change().is_none());
     assert_eq!(editor.completed, None, "a successful read is not a save");
     editor.sleep = SleepTimeout::from_seconds(600);
@@ -318,6 +332,7 @@ fn aula_sleep_edit_uses_one_snapshot_and_blocks_concurrent_lighting_writes(
                 effect: 21,
                 brightness: None,
                 speed: None,
+                color_mode: None,
             },
             None,
         )))

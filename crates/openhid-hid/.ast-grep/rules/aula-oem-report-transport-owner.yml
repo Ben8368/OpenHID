@@ -1,0 +1,14 @@
+# openhid-hid::host::ensure_aula_oem_raw_report_transport owns the AULA OEM raw-report platform decision.
+id: hid-aula-oem-report-transport-owner
+language: rust
+severity: error
+message: Use openhid-hid::host::ensure_aula_oem_raw_report_transport; do not rederive its Linux/Windows platform decision.
+files:
+  - crates/**/*.rs
+rule:
+  all:
+    - pattern: cfg!(any(target_os = "linux", target_os = "windows"))
+    - not:
+        inside:
+          pattern: fn ensure_aula_oem_raw_report_transport() $$$ { $$$ }
+          stopBy: end

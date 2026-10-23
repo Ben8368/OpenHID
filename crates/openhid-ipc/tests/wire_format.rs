@@ -105,7 +105,7 @@ fn representative_smartshift_status() -> SmartShiftStatus {
 /// unreleased version and leave this pin alone (`crates/openhid-ipc/AGENTS.md`).
 #[test]
 fn protocol_version_is_pinned() {
-    assert_eq!(PROTOCOL_VERSION, 38);
+    assert_eq!(PROTOCOL_VERSION, 41);
 }
 
 #[test]
@@ -888,17 +888,18 @@ fn standalone_light_dtos_commands_and_errors() {
         light_capabilities: Some(capabilities),
         driver_id: "litra".into(),
         registry_model_id: Some("8c900".into()),
+        battery: None,
     };
 
     assert_wire(
         &standalone,
-        "fb6d04fb00c9fb43fffb02020d73657269616c3a676c6f772d310a4c6974726120476c6f7701044c6f67690106676c6f772d31000000000d010001010114fa010101fb8c0afb641964020000056c6974726101053863393030",
+        "fb6d04fb00c9fb43fffb02020d73657269616c3a676c6f772d310a4c6974726120476c6f7701044c6f67690106676c6f772d31000000000d010001010114fa010101fb8c0afb641964020000056c697472610105386339303000",
     );
     let mut legacy = standalone.clone();
     legacy.registry_model_id = None;
     assert_wire(
         &legacy,
-        "fb6d04fb00c9fb43fffb02020d73657269616c3a676c6f772d310a4c6974726120476c6f7701044c6f67690106676c6f772d31000000000d010001010114fa010101fb8c0afb641964020000056c6974726100",
+        "fb6d04fb00c9fb43fffb02020d73657269616c3a676c6f772d310a4c6974726120476c6f7701044c6f67690106676c6f772d31000000000d010001010114fa010101fb8c0afb641964020000056c697472610000",
     );
     assert_wire(&capabilities, "010114fa010101fb8c0afb641964020000");
     assert_wire(&brightness, "14fa0101");
@@ -1062,19 +1063,21 @@ fn aula_lighting_wire_contract() {
         effect: 12,
         brightness: Some(3),
         speed: Some(4),
+        color_mode: None,
     };
-    assert_wire(&state, "0c01030104");
+    assert_wire(&state, "0c0103010400");
     // Unknown/custom effect IDs remain readable without implying write support.
     assert_wire(
         &LightingState {
             effect: 21,
             brightness: None,
             speed: None,
+            color_mode: None,
         },
-        "150000",
+        "15000000",
     );
     let change = LightingChange::new(Some(12), Some(2), None).unwrap();
-    assert_wire(&change, "010c010200");
+    assert_wire(&change, "010c01020000");
     assert_wire(&LightingMode::Apply, "00");
     assert_wire(&LightingMode::Save, "01");
     assert_wire(&LightingMode::Preview, "02");
@@ -1094,15 +1097,15 @@ fn aula_lighting_wire_contract() {
             change,
             mode: LightingMode::Save,
         },
-        "28020102010c01020001",
+        "28020102010c0102000001",
     );
     assert_wire(
         &openhid_ipc::AgentResponse::ReadAulaLighting(Ok(state)),
-        "27000c01030104",
+        "27000c0103010400",
     );
     assert_wire(
         &openhid_ipc::AgentResponse::SetAulaLighting(Ok(state)),
-        "28000c01030104",
+        "28000c0103010400",
     );
 }
 
@@ -1121,6 +1124,41 @@ fn aula_invalid_wire_edits_are_refused_before_dispatch() {
 }
 
 #[test]
+fn aula_per_key_rgb_wire_contract_is_full_table_and_append_only() {
+    use openhid_core::hid::aula::{AulaPerKeyRgb, AulaRgb, AulaState, LightingState};
+    let route = DeviceRoute::Direct {
+        vendor_id: 1,
+        product_id: 2,
+    };
+    let colors = AulaPerKeyRgb::solid(AulaRgb::new(1, 2, 3));
+    let expected_request = format!("2d0201027e{}", "010203".repeat(126));
+    assert_wire(
+        &AgentRequest::SetAulaPerKeyRgb { route, colors },
+        &expected_request,
+    );
+    assert_wire(
+        &openhid_ipc::AgentResponse::SetAulaPerKeyRgb(Ok(AulaState::new(
+            LightingState {
+                effect: 21,
+                brightness: None,
+                speed: None,
+                color_mode: None,
+            },
+            None,
+        ))),
+        "2d00150000000000",
+    );
+}
+
+#[test]
+fn aula_per_key_rgb_wire_rejects_incomplete_tables_before_dispatch() {
+    use openhid_core::hid::aula::AulaPerKeyRgb;
+    let mut bytes = vec![125];
+    bytes.extend(std::iter::repeat_n(0, 125 * 3));
+    decode_frame::<AulaPerKeyRgb>(&bytes).unwrap_err();
+}
+
+#[test]
 fn aula_settings_wire_contract() {
     use openhid_core::hid::aula::{
         AulaChange, AulaState, LightingMode, LightingState, SleepTimeout,
@@ -1132,12 +1170,13 @@ fn aula_settings_wire_contract() {
             effect: 12,
             brightness: Some(3),
             speed: Some(4),
+            color_mode: None,
         },
         Some(timeout),
     );
-    assert_wire(&state, "0c0103010401fb5802");
+    assert_wire(&state, "0c010301040001fb5802000000");
     let change = AulaChange::new(None, Some(timeout)).unwrap();
-    assert_wire(&change, "0001fb5802");
+    assert_wire(&change, "0001fb58020000");
     let route = DeviceRoute::Direct {
         vendor_id: 1,
         product_id: 2,
@@ -1154,15 +1193,61 @@ fn aula_settings_wire_contract() {
             change,
             mode: LightingMode::Save,
         },
-        "2a0201020001fb580201",
+        "2a0201020001fb5802000001",
     );
     assert_wire(
-        &openhid_ipc::AgentResponse::ReadAulaSettings(Ok(state)),
-        "29000c0103010401fb5802",
+        &openhid_ipc::AgentResponse::ReadAulaSettings(Ok(state.clone())),
+        "29000c010301040001fb5802000000",
     );
     assert_wire(
         &openhid_ipc::AgentResponse::SetAulaSettings(Ok(state)),
-        "2a000c0103010401fb5802",
+        "2a000c0103010401fb5802000000",
+    );
+    let route = DeviceRoute::Direct {
+        vendor_id: 1,
+        product_id: 2,
+    };
+    assert_wire(&AgentRequest::ReadAulaMacroPrefix { route }, "31020102");
+    assert_wire(
+        &openhid_ipc::AgentResponse::ReadAulaMacroPrefix(Ok(vec![0xaa])),
+        "310001aa",
+    );
+    let route = DeviceRoute::Direct {
+        vendor_id: 1,
+        product_id: 2,
+    };
+    assert_wire(
+        &AgentRequest::ReadAulaWiredConfig {
+            route: route.clone(),
+        },
+        "32020102",
+    );
+    assert_wire(
+        &AgentRequest::SetAulaWiredConfig {
+            route,
+            bytes: vec![0xaa],
+        },
+        "3302010201aa",
+    );
+    assert_wire(
+        &openhid_ipc::AgentResponse::ReadAulaWiredConfig(Ok(vec![0xaa])),
+        "320001aa",
+    );
+    assert_wire(
+        &openhid_ipc::AgentResponse::SetAulaWiredConfig(Ok(vec![0xaa])),
+        "330001aa",
+    );
+    let route = DeviceRoute::Direct {
+        vendor_id: 1,
+        product_id: 2,
+    };
+    assert_wire(
+        &AgentRequest::ReadAulaMacroTableCandidate { route },
+        "36020102",
+    );
+    assert_wire(
+        &openhid_ipc::AgentResponse::ReadAulaMacroTableCandidate(Ok(vec![vec![0xaa]])),
+        "36000101aa",
     );
 }
 

@@ -505,6 +505,7 @@ mod format_tests {
             light_capabilities: None,
             driver_id: "aula-f87-pro-wireless".into(),
             registry_model_id: None,
+            battery: None,
         };
         let output = super::StandaloneDisplay(&device).to_string();
         assert!(output.starts_with("● AULA F87 PRO"));

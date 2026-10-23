@@ -71,12 +71,14 @@ Windows desktop smoke check. The device home screen displayed the OpenHID
 window title, replacement icon, and five synthetic devices. The Settings and
 About screens were not verified interactively.
 
-The normal debug desktop executable overflowed its main-thread stack during
-startup. For the home-screen observation only, it was relinked with
-`cargo rustc --locked -p openhid-desktop -- -C link-arg=/STACK:16777216`.
-This was a temporary debug executable setting, not a source fix. The cause
-and normal debug startup remain unresolved; the observation does not prove
-that a release installer starts successfully.
+The normal debug desktop executable previously overflowed its main-thread
+stack during startup while initializing the generated locale backend. The
+desktop build script now reserves 4 MiB for the Windows debug executable only;
+PE-header inspection confirmed `SizeOfStackReserve=4194304` in the linked
+`target/debug/openhid-desktop.exe`. This addresses the measured 1.17 MiB frame
+without changing release binaries or the agent/CLI stack settings. The desktop
+was not launched again during this verification, so normal debug startup and
+the release installer still need runtime confirmation.
 
 Linux/macOS runtime behavior, platform installers, and macOS Icon Composer
 output were not validated. No physical-device HID writes or AULA F87 PRO

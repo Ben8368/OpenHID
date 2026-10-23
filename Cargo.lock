@@ -5551,6 +5551,7 @@ dependencies = [
  "openhid-camera",
  "openhid-core",
  "openhid-device",
+ "openhid-device-registry",
  "openhid-fixture",
  "openhid-hid",
  "openhid-ipc",

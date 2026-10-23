@@ -1,0 +1,20 @@
+# The seven F87 OEM modifier encodings are owned by modifier_action_pair in
+# openhid-core/src/hid/aula/oem_profile.rs.
+id: core-aula-oem-modifier-action-owner
+language: rust
+severity: error
+message: Use the core OEM modifier action conversion owner instead of duplicating an F87 profile encoding.
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/openhid-core/src/hid/aula/oem_profile.rs
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: "[0x01, 0, 0, 0x11]"
+    - pattern: "[0x02, 0, 0, 0x10]"
+    - pattern: "[0x04, 0, 0, 0x12]"
+    - pattern: "[0x08, 0, 0, 0x5b]"
+    - pattern: "[0x10, 0, 0, 0xa3]"
+    - pattern: "[0x20, 0, 0, 0xa1]"
+    - pattern: "[0x40, 0, 0, 0xa5]"

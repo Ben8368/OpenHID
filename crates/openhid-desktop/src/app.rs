@@ -155,10 +155,10 @@ impl DetailTab {
             tabs.push(Self::Pointer);
         }
         if caps.lighting
-            || record
-                .route
-                .as_ref()
-                .is_some_and(|route| openhid_core::hid::aula::route_identity(route).is_some())
+            || record.route.as_ref().is_some_and(|route| {
+                openhid_core::hid::aula::route_identity(route).is_some()
+                    || openhid_core::hid::aula::wired_route_identity(route).is_some()
+            })
         {
             tabs.push(Self::Lighting);
         }
@@ -283,7 +283,7 @@ impl AppView {
         let dpi_panel = cx.new(DpiPanel::new);
         let smartshift_panel = cx.new(SmartShiftPanel::new);
         let lighting_panel = cx.new(LightingPanel::new);
-        let aula_lighting_panel = cx.new(AulaLightingPanel::new);
+        let aula_lighting_panel = cx.new(|cx| AulaLightingPanel::new(window, cx));
         let camera_preview = cx.new(CameraPreview::new);
         let camera_controls = cx.new(CameraControlsPanel::new);
         let light_panel = cx.new(LightPanel::new);

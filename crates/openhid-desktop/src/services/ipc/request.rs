@@ -17,7 +17,9 @@
 use std::future::Future;
 
 use openhid_core::config::{ConfigRevision, Lighting};
-use openhid_core::hid::aula::{AulaChange, AulaState, LightingMode};
+use openhid_core::hid::aula::{
+    AulaChange, AulaPerKeyRgb, AulaState, AulaWiredConfigBlock, AulaWiredKeymapBlob, LightingMode,
+};
 use openhid_core::hid::{
     BacklightChange, BacklightState, DeviceRoute, Dpi, DpiInfo, EasySwitchHosts, FnLockState,
     LightCommand, ReceiverSelector, ReportRate, ReportRateInfo, SmartShiftStatus, WriteError,
@@ -133,6 +135,181 @@ impl Request for SetAulaSettings {
     async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
         openhid_ipc::client::aula::set_settings(client, self.route.clone(), self.change, self.mode)
             .await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, _: &UpdateSender) {
+        let _ = self.reply.send(or_unavailable(outcome));
+    }
+}
+
+/// Read the complete wired F87 Pro configuration block through the agent.
+pub struct ReadAulaWiredConfig {
+    pub route: DeviceRoute,
+    pub reply: oneshot::Sender<Result<AulaWiredConfigBlock, WriteError>>,
+}
+
+impl Request for ReadAulaWiredConfig {
+    type Answer = Result<Vec<u8>, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        openhid_ipc::client::aula::read_wired_config(client, self.route.clone()).await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, _: &UpdateSender) {
+        let result = or_unavailable(outcome).and_then(|bytes| {
+            AulaWiredConfigBlock::from_bytes(&bytes)
+                .map_err(|error| WriteError::Hid(error.to_string()))
+        });
+        let _ = self.reply.send(result);
+    }
+}
+
+/// Write and verify a complete wired F87 Pro configuration block.
+pub struct SetAulaWiredConfig {
+    pub route: DeviceRoute,
+    pub block: AulaWiredConfigBlock,
+    pub reply: oneshot::Sender<Result<AulaWiredConfigBlock, WriteError>>,
+}
+
+impl Request for SetAulaWiredConfig {
+    type Answer = Result<Vec<u8>, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        openhid_ipc::client::aula::set_wired_config(
+            client,
+            self.route.clone(),
+            self.block.as_bytes().to_vec(),
+        )
+        .await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, _: &UpdateSender) {
+        let result = or_unavailable(outcome).and_then(|bytes| {
+            AulaWiredConfigBlock::from_bytes(&bytes)
+                .map_err(|error| WriteError::Hid(error.to_string()))
+        });
+        let _ = self.reply.send(result);
+    }
+}
+
+/// Upload a model-gated wired F87 Pro keymap report.
+pub struct SetAulaWiredKeymap {
+    pub route: DeviceRoute,
+    pub blob: AulaWiredKeymapBlob,
+    pub reply: oneshot::Sender<Result<(), WriteError>>,
+}
+
+impl Request for SetAulaWiredKeymap {
+    type Answer = Result<(), WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        openhid_ipc::client::aula::set_wired_keymap(
+            client,
+            self.route.clone(),
+            self.blob.as_bytes().to_vec(),
+        )
+        .await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, _: &UpdateSender) {
+        let _ = self.reply.send(or_unavailable(outcome));
+    }
+}
+
+/// Apply a complete 126-LED F87 PRO wireless RGB table.
+pub struct SetAulaPerKeyRgb {
+    pub route: DeviceRoute,
+    pub colors: AulaPerKeyRgb,
+    pub reply: oneshot::Sender<Result<AulaState, WriteError>>,
+}
+
+impl Request for SetAulaPerKeyRgb {
+    type Answer = Result<AulaState, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        openhid_ipc::client::aula::set_per_key_rgb(client, self.route.clone(), self.colors.clone())
+            .await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, _: &UpdateSender) {
+        let _ = self.reply.send(or_unavailable(outcome));
+    }
+}
+
+/// Read both complete raw F87 PRO wireless keymap layers.
+pub struct ReadAulaKeymap {
+    pub route: DeviceRoute,
+    pub reply: oneshot::Sender<Result<openhid_core::hid::aula::AulaKeymap, WriteError>>,
+}
+
+impl Request for ReadAulaKeymap {
+    type Answer = Result<openhid_core::hid::aula::AulaKeymap, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        openhid_ipc::client::aula::read_keymap(client, self.route.clone()).await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, _: &UpdateSender) {
+        let _ = self.reply.send(or_unavailable(outcome));
+    }
+}
+
+/// Read the base layer independently of the unverified Fn selector.
+pub struct ReadAulaBaseMatrix {
+    pub route: DeviceRoute,
+    pub reply: oneshot::Sender<Result<openhid_core::hid::aula::AulaBaseMatrix, WriteError>>,
+}
+
+impl Request for ReadAulaBaseMatrix {
+    type Answer = Result<openhid_core::hid::aula::AulaBaseMatrix, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        openhid_ipc::client::aula::read_base_matrix(client, self.route.clone()).await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, _: &UpdateSender) {
+        let _ = self.reply.send(or_unavailable(outcome));
+    }
+}
+
+/// Apply and verify both keymap layers.
+pub struct SetAulaKeymap {
+    pub route: DeviceRoute,
+    pub keymap: openhid_core::hid::aula::AulaKeymap,
+    pub reply: oneshot::Sender<Result<openhid_core::hid::aula::AulaKeymap, WriteError>>,
+}
+
+impl Request for SetAulaKeymap {
+    type Answer = Result<openhid_core::hid::aula::AulaKeymap, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        openhid_ipc::client::aula::set_keymap(client, self.route.clone(), self.keymap.clone()).await
+    }
+
+    fn deliver(self, outcome: Result<Self::Answer, Unavailable>, _: &UpdateSender) {
+        let _ = self.reply.send(or_unavailable(outcome));
+    }
+}
+
+/// Apply both keymap layers only while the device still matches the edited snapshot.
+pub struct SetAulaKeymapIfUnchanged {
+    pub route: DeviceRoute,
+    pub expected: openhid_core::hid::aula::AulaKeymap,
+    pub keymap: openhid_core::hid::aula::AulaKeymap,
+    pub reply: oneshot::Sender<Result<openhid_core::hid::aula::AulaKeymap, WriteError>>,
+}
+
+impl Request for SetAulaKeymapIfUnchanged {
+    type Answer = Result<openhid_core::hid::aula::AulaKeymap, WriteError>;
+
+    async fn call(&self, client: &AgentClient) -> Result<Self::Answer, RpcError> {
+        openhid_ipc::client::aula::set_keymap_if_unchanged(
+            client,
+            self.route.clone(),
+            self.expected.clone(),
+            self.keymap.clone(),
+        )
+        .await
     }
 
     fn deliver(self, outcome: Result<Self::Answer, Unavailable>, _: &UpdateSender) {
@@ -777,6 +954,14 @@ macro_rules! commands {
 commands! {
     ReadAulaSettings,
     SetAulaSettings,
+    ReadAulaWiredConfig,
+    SetAulaWiredConfig,
+    SetAulaWiredKeymap,
+    SetAulaPerKeyRgb,
+    ReadAulaKeymap,
+    ReadAulaBaseMatrix,
+    SetAulaKeymap,
+    SetAulaKeymapIfUnchanged,
     SetDpi,
     SetLighting,
     SetLight,

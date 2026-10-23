@@ -20,7 +20,7 @@ use windows_sys::Win32::{
     System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED},
 };
 
-use super::super::windows_hid::HidHandle;
+use super::super::windows_hid::{HidHandle, NativeHidWriter};
 
 // GetOverlappedResult is nonblocking; yield between checks so one sleeping
 // device cannot occupy the agent runtime. Protocol deadlines remain upstream.
@@ -49,6 +49,8 @@ pub(crate) fn open(
         handle: Arc::new(handle),
         input_length: usize::from(caps.InputReportByteLength),
         output_length: usize::from(caps.OutputReportByteLength),
+        native_writer: NativeHidWriter::new(device)
+            .ok_or_else(|| BackendError::Backend("expected a Windows HID device path".into()))?,
         gate,
     };
     session.gate.ensure_allowed()?;
@@ -75,6 +77,7 @@ struct Session {
     handle: Arc<HidHandle>,
     input_length: usize,
     output_length: usize,
+    native_writer: NativeHidWriter,
     gate: DeviceIoGate,
 }
 
@@ -206,7 +209,16 @@ impl RawWriter for Session {
             ));
         }
         let mut pending = Pending::new(self.handle.clone(), report.into());
-        pending.start_write()?;
+        if let Err(error) = pending.start_write() {
+            if matches!(error, BackendError::Disconnected) {
+                return Err(error);
+            }
+            self.native_writer
+                .write_report(report)
+                .map_err(|fallback| BackendError::Backend(fallback.to_string()))?;
+            self.gate.ensure_allowed()?;
+            return Ok(());
+        }
         if pending.finish(&self.gate).await? != report.len() {
             return Err(BackendError::Backend("short HID output write".into()));
         }
@@ -234,6 +246,40 @@ impl RawSession for Session {
             .get(..length)
             .ok_or_else(|| BackendError::Backend("oversized input report".into()))?;
         buffer[..length].copy_from_slice(report);
+        Ok(length)
+    }
+
+    async fn exchange_output_report(
+        &mut self,
+        report: &[u8],
+        buffer: &mut [u8],
+    ) -> Result<usize, BackendError> {
+        self.gate.ensure_allowed()?;
+        if report.len() != self.output_length {
+            return Err(BackendError::Backend(
+                "output report length does not match the selected collection".into(),
+            ));
+        }
+        if buffer.len() < self.input_length {
+            return Err(BackendError::Backend(
+                "input buffer is smaller than the selected collection report".into(),
+            ));
+        }
+        let mut pending = Pending::new(
+            self.handle.clone(),
+            vec![0; self.input_length].into_boxed_slice(),
+        );
+        pending.start_read()?;
+        tracing::debug!("native raw input read armed before output report");
+        self.write_output_report(report).await?;
+        tracing::debug!("native raw output report sent with input read armed");
+        let length = pending.finish(&self.gate).await?;
+        tracing::debug!(length, "native raw input report completed exchange");
+        let input = pending
+            .buffer
+            .get(..length)
+            .ok_or_else(|| BackendError::Backend("oversized input report".into()))?;
+        buffer[..length].copy_from_slice(input);
         Ok(length)
     }
 }

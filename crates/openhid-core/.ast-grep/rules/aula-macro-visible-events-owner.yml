@@ -1,0 +1,14 @@
+# AulaOemMacroFile owns which raw macro records appear as editable OEM rows.
+id: core-aula-macro-visible-events-owner
+language: rust
+severity: error
+message: Use AulaOemMacroFile::oem_editor_event_indices or oem_editor_event_count for OEM macro row visibility.
+files:
+  - crates/**/*.rs
+ignores:
+  - crates/openhid-core/src/hid/aula/macro_file.rs
+  - "**/tests.rs"
+rule:
+  any:
+    - pattern: $EVENT.kind() == AulaOemMacroEventKind::EmptyRow
+    - pattern: $EVENT.kind() != AulaOemMacroEventKind::EmptyRow
