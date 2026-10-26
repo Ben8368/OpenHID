@@ -1,11 +1,11 @@
 # AULA F87 PRO: experimental support
 
-Investigation and verification: October 19–23, 2026. Overall audit: **YELLOW**.
-Recognition, complete configuration reads, recoverable built-in lighting,
-wireless sleep, debounce and side-light effect edits, configuration-block
-backup/restore, and a desktop settings editor are implemented. Full OEM
-application replacement remains in progress;
-the acceptance table below tracks the missing and not-yet-verified workflows.
+Investigation and verification: October 19–26, 2026. Overall audit: **YELLOW**.
+Recognition, complete wired configuration reads, recoverable built-in lighting,
+wireless sleep, wireless debounce and side-light effect edits, configuration-block
+backup/restore, and desktop settings editors are implemented. Full OEM application
+replacement remains in progress; the acceptance table below tracks the missing
+and not-yet-verified workflows.
 
 OpenHID recognizes the measured 2.4 GHz receiver control collection as one
 standalone keyboard. It never enters Logitech HID++ probing or pairing. The
@@ -34,27 +34,42 @@ that this OEM application can configure the keyboard over Bluetooth. Current
 replacement parity therefore covers the two transports the installed profile
 supports; Bluetooth configuration remains outside that demonstrated OEM scope.
 
-For wired diagnostics, the read-only `0x06/0x82` probe now accepts only the
-F87 Pro model byte (`0x0B` at response offset 13), in addition to the echoed
-selector and family checks. This keeps the keymap upload gate from treating
-the related F87 TK model (`0x66`) as an F87 Pro. The model byte is documented
-as hardware-verified by the [independent F87 controller protocol](https://github.com/RadianceADM/aula-f87-control/blob/main/docs/PROTOCOL.md);
-OpenHID has not yet observed that response from this keyboard.
-The wired protocol layer can read and replace the full 128-byte healthy
-configuration block. Persistent writes capture the original block, verify
-readback and attempt exact restoration on failure. Wired candidates now enter
-standalone inventory only after the model query returns the F87 Pro code. The
-desktop lighting panel uses the Agent/IPC path for supported built-in lighting,
-sleep, and side-light fields; it hides wireless-only editors and the unverified
-debounce control. No wired candidate has been connected for physical validation,
-so discovery, settings, visible output, and persistence remain unverified.
+For wired diagnostics, the read-only `0x06/0x82` probe accepts only the F87 Pro
+model byte (`0x0B` at response offset 13), in addition to the echoed selector
+and family checks. This keeps the keymap upload gate from treating the related
+F87 TK model (`0x66`) as an F87 Pro. On October 26, 2026, the probe returned
+`06 82 01 00 01 00 06 00 03 00 00 00 01 0b` from the attached `258A:010C`
+keyboard, confirming the model gate on this hardware. Direct `openhid list` also
+reported `AULA F87 PRO (USB)` online. A model-gated read returned the complete
+128-byte healthy configuration block; its SHA-256 matched the earlier local
+128-byte backup. The current values decode to effect 12, brightness 3, speed 4,
+300-second sleep, and side-light effect 1. The wired configuration write path was
+also exercised with a reversible side-light change: the original 128-byte block
+was restored and the final SHA-256 again matched the original backup.
+
+The desktop lighting panel uses Agent/IPC for wired supported built-in lighting,
+sleep and side-light fields. Wired Debounce remains hidden: although the installed
+`wired/KB.ini` sets `ShowDebounce=0x04000101`, the current wired config block
+contains fixed marker bytes `04 04 07` at offsets 6–8, so the wireless debounce
+byte mapping cannot be reused. A wired Debounce read/write mapping has not been
+verified. Wired macro reads are also experimental: two consecutive 4096-byte
+`0x06/0x85` candidate reads returned all-zero payloads except that the first had
+three non-zero bytes; the dumps differed at offsets `0x200`, `0x201`, and
+`0xA00`. They are not a reliable macro backup, and no macro data was written.
+Wired keymap upload is still write-only, but the base-layer transfer has now been
+exercised on the attached keyboard: changing the physical `A` slot to HID `F24`
+produced Windows `VK_F24` (`0x87`) on the next key press. The factory base
+template was then uploaded again and the device's original configuration block
+was restored. This verifies the base-layer transfer and visible key behavior,
+not reliable keymap readback, recovery of an unknown original custom layout, Fn
+layer behavior, or persistence across USB reconnects.
 
 ## Current delivery scope
 
 The current milestone covers the recognized wireless receiver, built-in lighting,
 idle timeout, debounce and side-light effect selection, recoverable configuration
 transactions, configuration backup/restore, local base/Fn keymap editing,
-experimental base/Fn keymap writing with readback/recovery, matrix inspection/export, and base/Fn keymap
+write-only base/Fn keymap transfer planning, matrix inspection/export, and base/Fn keymap
 migration between OpenHID profiles and OEM local profile files. Built-in lighting
 controls are
 filtered by the OEM `LedOpt` capability table, including single-color and colorful
@@ -140,10 +155,12 @@ selected, imported, exported and deleted; those profile actions never access the
 device. Local macro profiles can be imported, inspected and edited, but applying
 macros to the keyboard and playback controls remain unavailable. Wired
 configuration now has experimental inventory, Agent/IPC and desktop lighting
-paths, but no `258A:010C` device has been connected for validation. The desktop
-can import an OEM base profile or validated report, edit representable wired
-single-key actions, export the report and upload it through the Agent after an
-explicit warning; the keyboard has no reliable keymap readback or rollback.
+paths, and the directly attached `258A:010C` device has passed model-probe,
+configuration read/write/restore, and base-layer key behavior checks. The
+desktop can import an OEM base profile or validated report, edit representable
+wired single-key actions, export the report and upload it through the Agent
+after an explicit warning. The keyboard still has no reliable keymap readback,
+and OpenHID has not demonstrated rollback to an unknown original custom layout.
 Bluetooth configuration and firmware tools remain
 deferred. The installed F87 profile blocks the OEM audio worker, so
 music-synced lighting is not currently treated as a replacement requirement.
@@ -159,18 +176,19 @@ confirmation rather than assuming every generic catalog entry applies.
 
 | Workflow | Current evidence | Remaining acceptance |
 | --- | --- | --- |
-| One keyboard in inventory | Strict receiver collection identity, complete live config probe, injected inventory tests, and real-agent CLI/GUI inventory agreement | Native reconnect and sleeping-device recovery |
-| Built-in lighting and persistent settings | Exact echoes, complete staged/saved readback; real brightness change and restoration; effect-specific level and color-mode controls use OEM `LedOpt` capabilities; Agent settings and keymap reads now share the per-route queue used by writes | Human-visible effect/speed/off checks, physical custom-color and colorful-mode writes, power-cycle persistence |
+| One keyboard in inventory | Strict receiver collection identity and injected inventory tests; on October 26, 2026, `openhid list` directly enumerated the attached `258A:010C` keyboard as `AULA F87 PRO (USB)` after its wired model query succeeded | Native reconnect, sleeping-device recovery, and physical GUI/Agent inventory agreement |
+| Built-in lighting and persistent settings | Exact echoes and full staged/saved readback in tests; on October 26, 2026, a direct hardware read returned the 128-byte wired config block and matched the earlier local backup by SHA-256; current effect/level/sleep/side-light values decode successfully | Human-visible effect/speed/off checks, wired setting writes through the desktop Agent path, physical custom-color and colorful-mode writes, and power-cycle persistence |
 | Wireless sleep | OEM option table; Rust 300-to-600-second SAVE with independent readback and full original restoration; native Chinese editor reads the original 300 seconds | Power-cycle persistence and physical writes initiated from the desktop |
-| Debounce | OEM `ShowDebounce=0x04000101`; an independent F87 controller reference maps config fragment 0, byte 8 values 0–4 to 1–5 ms; OpenHID decodes and stages that byte through the complete snapshot transaction | Confirm the field and units against a physical F87 OEM edit, then verify desktop and CLI writes and power-cycle persistence |
+| Wireless Debounce | OEM `ShowDebounce=0x04000101`; an independent F87 controller reference maps wireless config fragment 0, byte 8 values 0–4 to 1–5 ms; OpenHID decodes and stages that byte through the complete wireless snapshot transaction | Verify OEM edit and physical write/readback and power-cycle persistence |
+| Wired Debounce | The installed wired profile also advertises the control, but the live wired config block has fixed marker bytes `04 04 07` at offsets 6–8; no wired field mapping or editor path is implemented | Determine the wired OEM control transfer and setting encoding from a controlled OEM edit/capture, then add readback, a recoverable write path, desktop control and persistence verification |
 | Side-light effect | The [independent F87 controller protocol](https://github.com/RadianceADM/aula-f87-control/blob/main/docs/PROTOCOL.md) verifies configuration byte 18 values 0–4 (off, rainbow wave, rainbow together, solid, breathing); OpenHID decodes, stages and exposes the value in both the desktop panel and CLI through the complete snapshot transaction | Compare readback and visible output on an awake F87 Pro, then verify desktop/CLI writes and power-cycle persistence; side-light color, brightness and speed are not exposed |
 | Battery | The [independent F87 controller protocol](https://github.com/RadianceADM/aula-f87-control/blob/main/docs/PROTOCOL.md) documents a read-only `0x13/0x4a` command returning 1–100% and a cable/on-battery marker; AULA settings readback and standalone inventory now feed the existing battery indicators | Confirm report values and power-source transitions on the physical receiver; the protocol does not distinguish active charging from full while cable-powered |
 | Board key assignments and combinations | Physical wireless read of both 126-entry layers in 36 frames each; all 87 physical keys correlated to OEM slot coordinates; local base+Fn editor and named profiles; standard keyboard, keypad and consumer usages plus an advanced raw four-byte editor; the current writer verifies the live F87 Pro PSD, rejects stale editor snapshots, writes 20-byte `0x13/0x01` fragments with per-fragment ACKs and reference pacing, reads both layers back, and attempts restoration on failure. A same-model Linux implementation uses this advertised wireless carrier; the installed Windows OEM's `0x15` carrier remains an offline plan | Verify ACK framing, visible key behavior, wireless writes, recovery and persistence on hardware. The 520-byte feature-report capture in [aula-keybind](https://github.com/vndarkblue/aula-keybind/blob/main/PROTOCOL.md) targets `258A:010C/010D`; it does not establish the wireless protocol for this `3554:FA09` receiver |
-| Macro library, editing and playback | Desktop imports `.mcr`, `.dct`, and portable JSON into named local profiles; tree profiles retain all node headers, support offline folder/macro creation, rename and leaf-node deletion, and let the user select/edit macro nodes by decoded OEM node path (with ordinal fallback) while exporting the full tree. CLI creates folders and empty macros, deletes leaf nodes, inspects node and parent IDs, names, kinds, extracts `.mcr` blocks, and edits raw events by node index. The installed `mac.dct` is zero-byte and imports as an empty tree; a locally created two-node tree round-tripped byte-for-byte. A read-only inventory of the installed F87 PRO directory and AULA user-data roots found no additional `.mcr` or `.dct` samples. The OEM-editor-created 128-byte `.mcr` sample round-trips byte-for-byte through OpenHID (SHA-256 `0E0F8B248A017EDFC982B2884687C14289DC84396B8FCC5B51E6A5D274CD37DE`); inspection shows one `0xF0` mouse-left record (`value=0x0045`) followed by one all-zero row, while the OEM editor displays one event. This validates a real non-empty container and one event code, not event timing semantics or the inferred non-empty `.dct` tree. Static tracing confirms the OEM writes 20-byte `0x15` frames with `WriteFile` and matches responses by command byte. After the F87 was awakened, an Agent-owned experimental `0x13/0x43` read collected all 37 expected fragments and returned a 512-byte all-zero prefix. The wired CLI reads the candidate table as eight `0x06/0x85` chunks and now has an experimental `0x06/0x05` writer: it saves a full 4096-byte backup, checks that the table has not changed, verifies full readback and attempts restoration on failure. The candidate follows a same-model community 520-byte report format that conflicts with the installed OEM's `0x407`-byte macro frame; it remains unverified on attached wired hardware | Validate a non-empty OEM `mac.dct` tree and the wired macro table read/write, recovery, key binding and physical playback on an attached F87 Pro. The wireless prefix remains incomplete; resolve its schema and full backup path before considering any wireless macro write |
+| Macro library, editing and playback | Desktop imports `.mcr`, `.dct`, and portable JSON into named local profiles; tree profiles retain all node headers, support offline folder/macro creation, rename and leaf-node deletion, and let the user select/edit macro nodes by decoded OEM node path (with ordinal fallback) while exporting the full tree. CLI creates folders and empty macros, deletes leaf nodes, inspects node and parent IDs, names, kinds, extracts `.mcr` blocks, and edits raw events by node index. The installed `mac.dct` is zero-byte and imports as an empty tree; a locally created two-node tree round-tripped byte-for-byte. A read-only inventory of the installed F87 PRO directory and AULA user-data roots found no additional `.mcr` or `.dct` samples. The OEM-editor-created 128-byte `.mcr` sample round-trips byte-for-byte through OpenHID (SHA-256 `0E0F8B248A017EDFC982B2884687C14289DC84396B8FCC5B51E6A5D274CD37DE`); inspection shows one `0xF0` mouse-left record (`value=0x0045`) followed by one all-zero row, while the OEM editor displays one event. This validates a real non-empty container and one event code, not event timing semantics or the inferred non-empty `.dct` tree. Static tracing confirms the OEM writes 20-byte `0x15` frames with `WriteFile` and matches responses by command byte. After the F87 was awakened, an Agent-owned experimental `0x13/0x43` read collected all 37 expected fragments and returned a 512-byte all-zero prefix. The wired CLI can read the opaque candidate table as eight `0x06/0x85` chunks for protocol investigation. The device-layer macro writer is hard-disabled before opening hardware: the candidate read is unstable on the attached keyboard, and the installed OEM's `0x407`-byte macro frame conflicts with the community 520-byte report format. No experimental macro write can reach the device until a stable backup and compatible transfer schema are proven | Validate a non-empty OEM `mac.dct` tree, a stable and complete wired macro read/backup, macro editing/write recovery, key binding and physical playback. On October 26, 2026, two wired `0x06/0x85` candidate reads differed at flattened offsets `0x200`, `0x201`, and `0xA00`; treat neither as a valid backup, and do not use the candidate writer until the read protocol is resolved. The wireless prefix remains incomplete; resolve its schema and full backup path before considering any wireless macro write |
 | Custom/per-key RGB | Complete 126-color model, full-table wireless writer, Agent/IPC path, desktop keyboard editor, local named profile save/select/import/export/delete, and versioned CLI profile import; all 87 OEM key indexes match their captured base-matrix slots | Verify `0x02/0x1c` and effect 21 on F87 hardware, visible per-key output and persistence; establish behavior of 39 unmapped table indexes, RGB read/backup or reliable recovery; exercise desktop profile lifecycle |
 | Profiles and backup/restore | Validated configuration-block restore, base-matrix export, local portable base+Fn keymap profiles, and OEM DCT base+Fn export that preserves every other template byte | Decode remaining OEM profile fields for lighting and macros; reliable device read/restore of all Fn/macro/RGB regions and complete device restoration |
 | Music-synced lighting | Installed driver contains `CMusicDlg`, `CAudioClient` and `CMusicDlg::StartMusic`; English catalog lists gain, color/colorful mode, effect, smoothness and 11 music-mode labels. All three installed F87 profile files omit `MusicUI` and `LightBarMusicCmd` (both default to 0). In `StartMusic`, worker creation is gated on `ShowPower=1` and `MaxFnNum=0`; F87 sets `ShowPower=0`, while `MaxFnNum` defaults to `0x30` | The installed F87 configuration keeps the OEM audio worker disabled, so audio-reactive lighting is not currently an F87 replacement requirement. Revisit only if direct OEM UI or hardware evidence shows this model enables it |
-| Wired key assignments | The installed app has separate `F87PRO` and `wired` profiles for the same `258A:010C` VID/PID; their six-byte `Psd` values differ (`03 00 00 00 01 0b` vs. `03 00 00 00 00 a9`). Static disassembly confirms its matcher compares VID/PID and all six `Psd` bytes. The OEM discovery query is `0x13/0x05`; `openhid diag aula --psd` implements the same wireless request shape and returned the wireless fingerprint (`03 00 00 00 01 0b`) after wake. The `0x13/0x44` config read still times out, and neither response establishes the wired fingerprint. A read-only `HidD_GetFeature` on the current wireless receiver's `FF04/0002` returned report `06 00 02 00 e2 00 56 29`; this does not match either profile fingerprint. Desktop and CLI can import the OEM base profile or a 520-byte `0x06` report, edit only supported single-key outputs, and save the report; the desktop uploads through the Agent only after an exact wired-route model gate and explicit confirmation. The keyboard has no reliable keymap readback or rollback. The report geometry comes from [aula-keybind](https://github.com/vndarkblue/aula-keybind), whose protocol prose overcounts slots: 128 slots plus header and trailer exceed 520 bytes, while its [implementation](https://github.com/vndarkblue/aula-keybind/blob/main/src/aula_keybind/protocol.py) allows complete slot indexes only through 126 | Confirm the `0x06/0x82` response against the installed F87 Pro wired profile, then verify upload behavior and visible key actions on a directly attached F87 Pro; this path has not been exercised on hardware and does not apply to the current `3554:FA09` receiver |
+| Wired key assignments | The installed app has separate `F87PRO` and `wired` profiles for the same `258A:010C` VID/PID; their six-byte `Psd` values differ (`03 00 00 00 01 0b` vs. `03 00 00 00 00 a9`). Static disassembly confirms its matcher compares VID/PID and all six `Psd` bytes. OpenHID's strict `0x06/0x82` probe returned `06 82 01 00 01 00 06 00 03 00 00 00 01 0b` from the attached keyboard and `openhid list` reported `AULA F87 PRO (USB)`. The 520-byte base-layer writer was then exercised on that device: changing physical `A` to HID `F24` produced Windows `VK_F24` (`0x87`), after which the packaged factory base template was uploaded again. The report geometry comes from [aula-keybind](https://github.com/vndarkblue/aula-keybind/blob/main/PROTOCOL.md), whose protocol prose overcounts slots: 128 slots plus header and trailer exceed 520 bytes, while its [implementation](https://github.com/vndarkblue/aula-keybind/blob/main/src/aula_keybind/protocol.py) allows complete slot indexes only through 126. OpenHID still cannot reliably read back the current keymap or recover an unknown original custom layout; Fn-layer behavior and USB-reconnect persistence remain unverified | Verify desktop/Agent initiated uploads, Fn-layer visible behavior, and persistence after USB reconnect. This path applies only to the directly attached `258A:010C` keyboard, not the `3554:FA09` receiver |
 | Wired lighting/configuration | The wired protocol layer reads and validates all 128 config bytes and can write one complete healthy block after the F87 Pro model query, preserving unknown bytes and restoring the original block if write/readback fails; the `aula-wired` CLI can export and restore binary backups; Agent/IPC read and write RPCs route through the Agent per-route worker; standalone inventory probes `FF00` candidate collections and exposes only validated F87 Pro responses; the desktop panel uses the RPCs for supported lighting effect/level, sleep and side-light edits while suppressing unsupported/unverified wireless-only controls | On a directly attached F87 Pro, confirm inventory, read settings, verify visible output, readback and persistence; compare the queried model response with the installed wired profile's OEM discriminator |
 | Bluetooth configuration | The keyboard supports Bluetooth pairing, but the installed OEM package has profiles only for wired `258A:010C` and 2.4 GHz `3554:FA09`; no Bluetooth configuration path is present | No Bluetooth workflow is required for parity with this installed application unless direct OEM behavior shows otherwise |
 | Firmware tools | Both F87 `KB.ini` profiles comment out `FwVerNeedToUpdate` (wireless threshold `0x11ff`, wired `0x1ff`); the driver reads the active value with default `0`, and the profile sets `Fw=24`. The user-click handler checks `FwVerNeedToUpdate` only in its local-update branch (`UpdateByLocal != 0`), compares it with the connected firmware version, and skips when the current version is greater. Installed `Cfg.ini` sets `UpdateByLocal=0` and `EnableYun=0`. The generic executable builds a remote `update_version.xml` URL, but no F87 firmware image is installed; a read-only GET to the default constructed manifest path returned HTTP 404 on 2026-10-23, which does not prove the updater is permanently disabled | Determine whether the remote updater exposes an F87 firmware offer under the installed profile/config, then establish its artifact source, model/version checks and recovery procedure before treating firmware update as F87 parity; no firmware writes implemented |
@@ -187,8 +205,8 @@ cargo run -p openhid -- diag aula --psd # read-only OEM wireless model query
 cargo run -p openhid -- diag aula --wired-model-probe # read-only wired Feature Report 0x06/0x82 query
 cargo run -p openhid -- aula-wired read-config --identity 'IDENTITY_FROM_WIRED_MODEL_PROBE' --output f87-wired-config.bin
 cargo run -p openhid -- aula-wired write-config --identity 'IDENTITY_FROM_WIRED_MODEL_PROBE' --input f87-wired-config.bin --apply # validates, snapshots, writes, reads back and recovers on failure
-cargo run -p openhid -- aula-wired read-macros --identity 'IDENTITY_FROM_WIRED_MODEL_PROBE' --output f87-wired-macros.bin # experimental opaque 4096-byte table read
-cargo run -p openhid -- aula-wired write-macros --identity 'IDENTITY_FROM_WIRED_MODEL_PROBE' --input edited-macros.bin --backup f87-wired-macros.original.bin --apply # experimental, full backup + readback + restore on failure
+cargo run -p openhid -- aula-wired read-macros --identity 'IDENTITY_FROM_WIRED_MODEL_PROBE' --output f87-wired-macros.bin # protocol investigation only; not a backup
+cargo run -p openhid -- aula-wired write-macros --identity 'IDENTITY_FROM_WIRED_MODEL_PROBE' --input edited-macros.bin --backup f87-wired-macros.original.bin --apply # refused before device access until protocol is stable
 cargo run -p openhid -- diag aula --side-light-effect 1 --save
 cargo run -p openhid -- diag aula --matrix # experimental read-only raw matrix
 cargo run -p openhid -- diag aula --matrix --backup f87-base-matrix.json
@@ -369,9 +387,10 @@ fields still contain their zero defaults; edited payload fields are preserved.
 Individual macros export as
 `.mcr`. Deletion requires confirmation. The CLI supports the same raw-record
 edits. Desktop macro playback and device writes from the `.mcr`/`.dct` editor
-remain unavailable. A separate wired CLI command can write an opaque 4096-byte
-macro-table candidate only after `--apply`; its transfer and recovery path
-remain experimental until verified on the physical keyboard.
+remain unavailable. A separate wired CLI command exists for protocol
+investigation, but its write operation is refused at the device boundary until a
+stable, complete backup and a compatible OEM transfer schema are verified on the
+physical keyboard.
 
 `--color` selects one custom color for an effect whose OEM `LedOpt` row permits
 custom color; `--colorful` selects its colorful mode. These settings upload a full
@@ -881,9 +900,9 @@ Push verification on the final source tree (Windows, 2026-10-20):
   because the device does not reliably return the current table. The upload is
   persistent according to the F87 wired protocol reference; preserve the source
   blob so the same layer can be restored.
-  A Windows Plug and Play inventory on 2026-10-23 found the `3554:FA09` receiver and no
-  `258A:010C` wired node, so this checkout has no attached wired interface to
-  identify or inspect.
+  A Windows Plug and Play inventory on 2026-10-23 found only the `3554:FA09`
+  receiver. The later October 26, 2026 hardware session attached and identified
+  the direct `258A:010C` F87 Pro keyboard.
 
 ## Built-in color modes (Windows, 2026-10-22)
 
@@ -1581,15 +1600,14 @@ evidence section. No packaging or installation was performed during the hardware
   the relationship between these paths is unknown, so the community packet
   shape is not validated for this OEM build. OpenHID's
   `openhid aula-wired read-macros` reads the opaque
-  4096-byte candidate after the exact wired F87 Pro model check. The new
-  `openhid aula-wired write-macros` path requires an explicit `--apply`, saves
-  the complete original table to a new backup file first, rejects a stale
-  backup, writes eight `0x06/0x05` chunks, verifies the full readback, and
-  attempts to restore and verify the original table on failure. The raw table
-  format and these wired transfers remain unverified on attached F87 Pro
-  hardware; the candidate writer must not be treated as compatible with the
-  installed OEM until the frame-length conflict is resolved. No macro event
-  editor or playback test uses this candidate yet.
+  4096-byte candidate after the exact wired F87 Pro model check. The `openhid aula-wired write-macros` command is retained as an explicit refusal
+   path for old scripts; it does not open the device or send a report. The
+   device-layer guard returns `ProtocolUnverified` before enumeration or handle
+   open. The raw table format and wired transfers remain unverified on the
+   attached F87 Pro hardware: two candidate reads differed, and the installed
+   OEM's logical `0x407`-byte macro frame conflicts with the community 520-byte
+   report candidate. No macro event editor or playback test uses this candidate
+   yet.
   The full wireless macro command fields, transfer-buffer
   schema, device capacity and persistence remain unresolved; reply matching
   has only been recovered from static code, not a live exchange.
@@ -1664,9 +1682,10 @@ evidence section. No packaging or installation was performed during the hardware
   fingerprint (`03 00 00 00 01 0b`). A same-session read of the established
   `0x13/0x44` configuration command timed out without input. A successful query
   reports six bytes for comparison with the installed wireless profile
-  (`03 00 00 00 01 0b`) and wired profile (`03 00 00 00 00 a9`). The diagnostic
-  does not yet identify the wired collection or enable wired support; those
-  require a separately verified wired transport and response.
+  (`03 00 00 00 01 0b`) and wired profile (`03 00 00 00 00 a9`). At the time of
+  this October 23 investigation, that wireless diagnostic did not identify the
+  wired collection; the separate wired Feature Report probe described below was
+  added and validated on October 26.
 - The earlier `FF04/0002` Feature report `0x06` read returned
   `06 00 02 00 e2 00 56 29`, which is not either profile discriminator. That
   feature read is separate from this OEM `0x13/0x05` input/output transaction.
@@ -1679,9 +1698,10 @@ evidence section. No packaging or installation was performed during the hardware
   of the collection that answered. It still does not match the installed app's
   six-byte wired `Psd` fingerprint. No settings are written. Multiple valid
   collections are rejected as ambiguous; specify `--identity` to select one.
-  A fresh Windows run on 2026-10-23 found no `258A:010C` collection, so no
-  wired query or wired keymap transfer was sent. An attached `3554:FA09`
-  wireless receiver is not a wired candidate.
+  The earlier Windows run on October 23, 2026 found no `258A:010C` collection,
+  so no wired query or keymap transfer was sent in that session. The attached
+  `3554:FA09` wireless receiver is not a wired candidate; the direct wired
+  collection was identified and exercised in the October 26, 2026 session.
 - `aula-keymap write-wired` uses that same model query as a pre-write gate on
   the explicitly selected collection. It checks the response ID, command, and
   echoed selector bytes, plus family code `0x03` and F87 Pro model code `0x0B`,
@@ -1689,3 +1709,40 @@ evidence section. No packaging or installation was performed during the hardware
   independent [Aula-Manager protocol sample](https://github.com/free-soldier28/Aula-Manager/blob/main/docs/PROTOCOL.md)
   documents a 14-byte `0x06/0x82` response on an F75 and describes F87 as the
   reference model; the response-to-F87-Pro `Psd` mapping remains unverified.
+
+## Wired F87 Pro hardware validation (Windows, 2026-10-26)
+
+- Windows device enumeration reported the keyboard's `258A:010C` composite device and its
+  keyboard, system-control, consumer-control and vendor-defined HID collections
+  present. `openhid list` ran without a reachable Agent, used direct hardware
+  enumeration, and listed `AULA F87 PRO (USB)` online with the same exact runtime
+  identity returned by the wired model probe. The AULA receiver also remained
+  present; it was not selected for wired operations.
+- `cargo run -q -p openhid -- diag aula --wired-model-probe` returned
+  `06 82 01 00 01 00 06 00 03 00 00 00 01 0b`, confirming the F87 Pro model
+  response on the selected wired vendor collection. This query is model discovery,
+  not a persistent setting write.
+- `cargo run -q -p openhid -- aula-wired read-config --identity ID --output NEW_FILE`
+  returned the validated 128-byte block. Its digest was
+  `D58AFBAE854D7FF396DC9EE7A6775F686576E417E3CF4C820BD380A67585C876`, matching
+  the earlier local baseline backup byte-for-byte. The block reports effect 12,
+  brightness 3, speed 4, sleep 300 seconds and side-light effect 1. This proves
+  the wired read path on this host; it does not prove GUI writes, visible changes
+  or persistence after a power cycle. A reversible side-light write through the wired configuration path was exercised separately; the original block was restored and its SHA-256 matched the baseline.
+- Two runs of `aula-wired read-macros` each returned 4096 candidate bytes, but
+  their SHA-256 digests differed
+  (`62D909F6ECE71A0382B3F0835D78CF1A98FF7221FF07F547D26644A7970808BF` and
+  `AD7FACB2586FC6E966C004D7D1D16B024F5805FF7CB47C7A85DABD8B48892CA7`). The
+  flattened candidate dumps differed at offsets `0x200` (`06` versus `00`),
+  `0x201` (`85` versus `00`), and `0xA00` (`06` versus `00`); all remaining
+  returned bytes were zero. This contradicts the assumption that the current
+  `0x06/0x85` path yields a stable complete table. Treat the output as an
+  unreliable protocol candidate, not as a backup or macro state; no persistent
+  macro write was attempted. Resolve Feature Report sizing/semantics and repeatable
+  readback before using the existing experimental writer or exposing macro apply.
+- Wired Debounce parity remains missing. The installed `wired/KB.ini` advertises
+  `ShowDebounce=0x04000101`; the directly read healthy wired block has the fixed
+  marker sequence `04 04 07` at offsets 6–8. That rules out blindly applying the
+  wireless fragment byte-8 mapping to the wired block, but does not identify the
+  wired Debounce transport. Capture/derive the OEM command and response before
+  adding a writer.

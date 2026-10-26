@@ -243,7 +243,10 @@ async fn missing_fragment_times_out_and_drops_session() {
         read_config(&backend, &node()).await,
         Err(ReadError::Timeout)
     ));
-    assert_eq!(started.elapsed(), READ_TIMEOUT);
+    assert_eq!(
+        started.elapsed(),
+        READ_ATTEMPT_TIMEOUT * u32::from(READ_ATTEMPTS)
+    );
     assert_eq!(backend.evidence.drops.load(Ordering::SeqCst), 1);
 }
 
@@ -415,8 +418,13 @@ async fn stalled_query_write_times_out_and_releases_session_without_reading() {
         read_config(&backend, &node()).await,
         Err(ReadError::Timeout)
     ));
-    assert_eq!(started.elapsed(), READ_TIMEOUT);
-    assert_eq!(backend.evidence.writes.lock().unwrap().len(), 1);
+    assert_eq!(
+        started.elapsed(),
+        READ_ATTEMPT_TIMEOUT * u32::from(READ_ATTEMPTS)
+    );
+    let writes = backend.evidence.writes.lock().unwrap();
+    assert_eq!(writes.len(), usize::from(READ_ATTEMPTS));
+    assert!(writes.iter().all(|report| report.get(1) == Some(&0x44)));
     assert_eq!(backend.evidence.reads.load(Ordering::SeqCst), 0);
     assert_eq!(backend.evidence.drops.load(Ordering::SeqCst), 1);
 }
@@ -610,7 +618,7 @@ async fn lighting_apply_preserves_unknown_bytes_and_verifies_full_readback_witho
             effect: 1,
             brightness: Some(2),
             speed: Some(2),
-            color_mode: None,
+            color_mode: Some(AulaColorModeState::SingleColor),
         }
     );
     let writes = backend.evidence.writes.lock().unwrap();
@@ -792,13 +800,27 @@ async fn preview_restore_failure_is_not_falsely_reported_as_caller_cancellation(
     reports.extend(echoed_frames(&edited));
     reports.extend(edited.map(Vec::from));
     reports.extend(echoed_frames(&CAPTURE));
-    // Restore echoes all arrive, but both readback requests get no reply.
+    // Restore echoes arrive, but the restoration readback query exhausts its retries.
     let backend = Backend::new(reports);
     assert!(matches!(
         update_lighting(&backend, None, change(), LightingMode::Preview, || false).await,
         Err(ConfigError::PreviewRestoreFailed(_))
     ));
-    assert_eq!(backend.evidence.writes.lock().unwrap().len(), 24);
+    let writes = backend.evidence.writes.lock().unwrap();
+    assert_eq!(
+        writes
+            .iter()
+            .filter(|report| report.get(1) == Some(&0x04))
+            .count(),
+        20
+    );
+    assert_eq!(
+        writes
+            .iter()
+            .filter(|report| report.get(1) == Some(&0x44))
+            .count(),
+        usize::from(READ_ATTEMPTS) + 2
+    );
 }
 
 fn save_echo() -> Vec<u8> {
@@ -1021,6 +1043,19 @@ const MATRIX_EXAMPLE: [[u8; 20]; 2] = [
 ];
 
 #[tokio::test]
+async fn wired_macro_write_guard_refuses_before_opening_hardware() {
+    let backend = Backend::new([]);
+    let original = WiredMacroTable::from_bytes(vec![0; 4096]).unwrap();
+
+    assert!(matches!(
+        write_wired_macro_table(&backend, Some("test-identity"), &original, &original).await,
+        Err(WiredMacroWriteError::ProtocolUnverified)
+    ));
+    assert_eq!(backend.evidence.opens.load(Ordering::SeqCst), 0);
+    assert!(backend.evidence.writes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn matrix_read_reorders_complete_raw_entries_and_sends_only_the_read_request() {
     let mut reports = vec![
         CAPTURE[0].to_vec(),
@@ -1204,4 +1239,18 @@ fn matrix_backups_preserve_opaque_entries_and_reject_wrong_regions_and_partial_d
         }
         WirelessMatrix::from_frames(frames).unwrap_err();
     }
+}
+
+#[test]
+fn wired_identity_accepts_copyable_windows_unc_spellings() {
+    let node = r#"id:UncPath("\\?\HID#VID_258A&PID_010C&MI_01&Col06#7&255edd5&0&0005#{4d1e55b2-f16f-11cf-88cb-001111000030}")"#;
+    assert!(super::wired::wired_identity_matches(node, node));
+    assert!(super::wired::wired_identity_matches(
+        node,
+        r"id:UncPath(\?\HID#VID_258A&PID_010C&MI_01&Col06#7&255edd5&0&0005#{4d1e55b2-f16f-11cf-88cb-001111000030})",
+    ));
+    assert!(!super::wired::wired_identity_matches(
+        node,
+        "id:UncPath(\\\\?\\HID#VID_258A&PID_010C&MI_01&Col05#7&255edd5&0&0004#{4d1e55b2-f16f-88cb-001111000030})",
+    ));
 }

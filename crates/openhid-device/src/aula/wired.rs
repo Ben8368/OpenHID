@@ -25,7 +25,6 @@ const MODEL_CODE_OFFSET: usize = 13;
 const CONFIG_READ_COMMAND: u8 = 0x84;
 const CONFIG_WRITE_COMMAND: u8 = 0x04;
 const MACRO_READ_COMMAND: u8 = 0x85;
-const MACRO_WRITE_COMMAND: u8 = 0x05;
 const MACRO_READ_CHUNKS: u8 = 8;
 const MACRO_CHUNK_LENGTH: usize = 512;
 const MACRO_TABLE_LENGTH: usize = MACRO_CHUNK_LENGTH * MACRO_READ_CHUNKS as usize;
@@ -33,7 +32,6 @@ const CONFIG_HEADER_LENGTH: usize = 8;
 const CONFIG_TRANSFER_LENGTH: usize = CONFIG_HEADER_LENGTH + AULA_WIRED_CONFIG_BLOCK_BYTE_LENGTH;
 const CONFIG_WRITE_SETTLE: Duration = Duration::from_millis(350);
 const MACRO_READ_TIMEOUT: Duration = Duration::from_secs(20);
-const MACRO_WRITE_SETTLE: Duration = Duration::from_millis(350);
 
 /// Failure to read one complete validated wired F87 Pro configuration block.
 #[derive(Debug, Error)]
@@ -127,40 +125,14 @@ pub enum WiredMacroReadError {
     InvalidResponse(&'static str),
 }
 
-/// A wired F87 Pro macro-table readback or restoration failed after a write attempt.
+/// A wired F87 Pro macro-table write was refused.
 #[derive(Debug, Error)]
 pub enum WiredMacroWriteError {
-    /// Writes require the exact identity printed by the read-only wired model probe.
+    /// The candidate read is unstable and does not provide a trustworthy backup.
     #[error(
-        "wired AULA macro writes require the exact identity from `openhid diag aula --wired-model-probe`"
+        "AULA wired macro writes are disabled until the macro read protocol produces a stable, complete backup"
     )]
-    IdentityRequired,
-    /// No matching direct USB keyboard collection was found.
-    #[error("no AULA wired keyboard collection (258A:010C) was found")]
-    NotFound,
-    /// The supplied identity did not select exactly one matching collection.
-    #[error("AULA wired collection selection failed: {0}")]
-    Selection(&'static str),
-    /// The selected collection did not pass the F87 Pro model query.
-    #[error("AULA wired macro write refused because the model query failed: {0}")]
-    ModelProbe(#[source] Box<WiredProbeError>),
-    /// The selected Feature Report could not be opened or written.
-    #[error(transparent)]
-    Backend(#[from] BackendError),
-    /// The current macro table could not be read before writing.
-    #[error("could not read the original AULA macro table: {0}")]
-    ReadOriginal(#[source] Box<WiredMacroReadError>),
-    /// The table changed after the caller saved the required backup.
-    #[error("AULA macro table changed after backup; no macro data was written")]
-    StaleOriginal,
-    /// The write failed; `recovery` reports whether the original table was restored.
-    #[error("AULA wired macro write failed: {cause}; original-table recovery: {recovery}")]
-    WriteRecovery {
-        /// Why the requested macro table was not verified.
-        cause: String,
-        /// Whether the original macro table was restored and verified.
-        recovery: String,
-    },
+    ProtocolUnverified,
 }
 
 /// Raw 4096-byte result of the experimental wired macro-table read.
@@ -280,7 +252,7 @@ pub async fn write_wired_keymap(
         .into_iter()
         .filter(|node| {
             openhid_device_registry::aula::matches_wired_candidate(node.vendor_id, node.product_id)
-                && node.identity() == identity
+                && wired_identity_matches(&node.identity(), identity)
         })
         .collect();
     if candidates.is_empty() {
@@ -344,86 +316,19 @@ pub async fn read_wired_macro_table(
         .map_err(|_| WiredMacroReadError::Timeout)?
 }
 
-/// Experimentally replace the complete wired macro-table candidate.
+/// Refuse wired macro-table writes until the protocol is verified against the OEM application.
 ///
-/// The caller must first persist `expected_original` as a backup. This method
-/// re-reads the device and refuses a stale backup, then writes the eight
-/// candidate `0x06/0x05` blocks and verifies the complete `0x06/0x85` readback.
-/// On any transfer or verification failure it attempts to restore and verify
-/// the original table. The 520-byte chunk protocol comes from a same-model
-/// community implementation. The installed OEM driver's static macro path
-/// instead shows a `0x407`-byte Feature Report buffer, so protocol compatibility
-/// is unresolved. Callers must require an explicit apply action.
+/// The current read candidate is unstable on the attached F87 Pro, and static
+/// analysis of the OEM driver shows a different logical transfer size. Keeping
+/// this guard at the device boundary ensures no experimental macro report can
+/// reach hardware through any caller.
 pub async fn write_wired_macro_table(
-    backend: &dyn HidBackend,
-    identity: Option<&str>,
-    expected_original: &WiredMacroTable,
-    target: &WiredMacroTable,
+    _backend: &dyn HidBackend,
+    _identity: Option<&str>,
+    _expected_original: &WiredMacroTable,
+    _target: &WiredMacroTable,
 ) -> Result<(), WiredMacroWriteError> {
-    let identity = identity.ok_or(WiredMacroWriteError::IdentityRequired)?;
-    let node = select_wired_node(backend, identity)
-        .await
-        .map_err(map_macro_write_selection_error)?;
-    query_candidate(backend, &node)
-        .await
-        .map_err(|error| WiredMacroWriteError::ModelProbe(Box::new(error)))?;
-
-    let original =
-        tokio::time::timeout(MACRO_READ_TIMEOUT, read_macro_table_on_node(backend, &node))
-            .await
-            .map_err(|_| {
-                WiredMacroWriteError::ReadOriginal(Box::new(WiredMacroReadError::Timeout))
-            })?
-            .map_err(|error| WiredMacroWriteError::ReadOriginal(Box::new(error)))?;
-    if &original != expected_original {
-        return Err(WiredMacroWriteError::StaleOriginal);
-    }
-    if &original == target {
-        return Ok(());
-    }
-
-    let cause = match tokio::time::timeout(
-        MACRO_READ_TIMEOUT,
-        write_macro_table_on_node(backend, &node, target),
-    )
-    .await
-    {
-        Ok(Ok(())) => {
-            tokio::time::sleep(MACRO_WRITE_SETTLE).await;
-            match tokio::time::timeout(MACRO_READ_TIMEOUT, read_macro_table_on_node(backend, &node))
-                .await
-            {
-                Ok(Ok(actual)) if &actual == target => return Ok(()),
-                Ok(Ok(_)) => "device macro-table readback differs from the requested table".into(),
-                Ok(Err(error)) => format!("device macro-table readback failed: {error}"),
-                Err(_) => "device macro-table readback timed out".into(),
-            }
-        }
-        Ok(Err(error)) => format!("macro-table feature report write failed: {error}"),
-        Err(_) => "macro-table feature report write timed out".into(),
-    };
-
-    let recovery = match tokio::time::timeout(
-        MACRO_READ_TIMEOUT,
-        write_macro_table_on_node(backend, &node, &original),
-    )
-    .await
-    {
-        Ok(Ok(())) => {
-            tokio::time::sleep(MACRO_WRITE_SETTLE).await;
-            match tokio::time::timeout(MACRO_READ_TIMEOUT, read_macro_table_on_node(backend, &node))
-                .await
-            {
-                Ok(Ok(actual)) if actual == original => "verified".to_owned(),
-                Ok(Ok(_)) => "failed: restored macro-table readback differs".to_owned(),
-                Ok(Err(error)) => format!("failed: restored macro-table readback failed: {error}"),
-                Err(_) => "failed: restored macro-table readback timed out".to_owned(),
-            }
-        }
-        Ok(Err(error)) => format!("failed: restoring original table failed: {error}"),
-        Err(_) => "failed: restoring original table timed out".to_owned(),
-    };
-    Err(WiredMacroWriteError::WriteRecovery { cause, recovery })
+    Err(WiredMacroWriteError::ProtocolUnverified)
 }
 
 async fn read_macro_table_on_node(
@@ -466,34 +371,6 @@ async fn read_macro_table_on_node(
     })
 }
 
-async fn write_macro_table_on_node(
-    backend: &dyn HidBackend,
-    node: &NodeInfo,
-    table: &WiredMacroTable,
-) -> Result<(), BackendError> {
-    let mut session = backend.open_feature_session(node).await?;
-    for chunk in 0..MACRO_READ_CHUNKS {
-        let mut report = [0; FEATURE_REPORT_LENGTH];
-        report[..8].copy_from_slice(&[
-            FEATURE_REPORT_ID,
-            MACRO_WRITE_COMMAND,
-            0,
-            0,
-            MACRO_READ_CHUNKS,
-            chunk,
-            0,
-            2,
-        ]);
-        let start = usize::from(chunk) * MACRO_CHUNK_LENGTH;
-        report[CONFIG_HEADER_LENGTH..]
-            .copy_from_slice(&table.as_bytes()[start..start + MACRO_CHUNK_LENGTH]);
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        session.write_feature_report(&report).await?;
-        tokio::time::sleep(Duration::from_millis(70)).await;
-    }
-    Ok(())
-}
-
 fn map_macro_selection_error(error: WiredConfigReadError) -> WiredMacroReadError {
     match error {
         WiredConfigReadError::IdentityRequired => WiredMacroReadError::IdentityRequired,
@@ -503,19 +380,6 @@ fn map_macro_selection_error(error: WiredConfigReadError) -> WiredMacroReadError
         WiredConfigReadError::Backend(error) => WiredMacroReadError::Backend(error),
         WiredConfigReadError::InvalidResponse(_) | WiredConfigReadError::InvalidBlock(_) => {
             WiredMacroReadError::Selection("wired route selection failed")
-        }
-    }
-}
-
-fn map_macro_write_selection_error(error: WiredConfigReadError) -> WiredMacroWriteError {
-    match error {
-        WiredConfigReadError::IdentityRequired => WiredMacroWriteError::IdentityRequired,
-        WiredConfigReadError::NotFound => WiredMacroWriteError::NotFound,
-        WiredConfigReadError::Selection(reason) => WiredMacroWriteError::Selection(reason),
-        WiredConfigReadError::ModelProbe(source) => WiredMacroWriteError::ModelProbe(source),
-        WiredConfigReadError::Backend(error) => WiredMacroWriteError::Backend(error),
-        WiredConfigReadError::InvalidResponse(_) | WiredConfigReadError::InvalidBlock(_) => {
-            WiredMacroWriteError::Selection("wired route selection failed")
         }
     }
 }
@@ -576,6 +440,25 @@ pub async fn write_wired_config(
     Err(WiredConfigWriteError::WriteRecovery { cause, recovery })
 }
 
+pub(super) fn wired_identity_matches(node_identity: &str, requested: &str) -> bool {
+    node_identity == requested
+        || canonical_wired_identity(node_identity) == canonical_wired_identity(requested)
+}
+
+fn canonical_wired_identity(value: &str) -> String {
+    let value = value.trim();
+    let path = value
+        .strip_prefix("id:UncPath(")
+        .and_then(|value| value.strip_suffix(')'))
+        .map_or(value, str::trim)
+        .trim_matches('"');
+    // Windows' native argument parser can consume one leading slash when a
+    // copied `UncPath("...")` identity crosses a process. Ignore the number
+    // of leading slashes so both spellings address the same case-insensitive
+    // HID path.
+    path.trim_start_matches('\\').to_ascii_lowercase()
+}
+
 async fn select_wired_node(
     backend: &dyn HidBackend,
     identity: &str,
@@ -586,7 +469,7 @@ async fn select_wired_node(
     });
     let mut candidates = nodes.into_iter().filter(|node| {
         openhid_device_registry::aula::matches_wired_candidate(node.vendor_id, node.product_id)
-            && node.identity() == identity
+            && wired_identity_matches(&node.identity(), identity)
     });
     let Some(node) = candidates.next() else {
         return if has_candidate {
@@ -738,7 +621,7 @@ async fn wired_candidates(
     if let Some(identity) = identity {
         let selected: Vec<_> = candidates
             .into_iter()
-            .filter(|node| node.identity() == identity)
+            .filter(|node| wired_identity_matches(&node.identity(), identity))
             .collect();
         return match selected.len() {
             1 => Ok(selected),

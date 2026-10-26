@@ -256,15 +256,19 @@ fn aula_save_button_uses_verified_agent_state_and_disables_while_busy(cx: &mut T
         )))
         .unwrap();
     cx.run_until_parked();
-    let hosted = panel.clone();
     let (_, visual) =
-        cx.add_window_view(|window, cx| gpui_component::Root::new(hosted, window, cx));
-    visual.simulate_resize(size(px(900.), px(700.)));
+        cx.add_window_view(|window, cx| gpui_component::Root::new(panel.clone(), window, cx));
+    visual.simulate_resize(size(px(900.), px(3000.)));
     visual.update(|window, cx| window.draw(cx).clear(cx));
     let save = visual
         .debug_bounds("aula-save")
         .expect("the lighting panel renders Save");
+    assert!(
+        save.origin.y >= px(0.) && save.bottom() <= px(3000.),
+        "Save must be visible: {save:?}"
+    );
     visual.simulate_click(save.center(), Modifiers::default());
+    visual.run_until_parked();
     visual.update(|window, cx| window.draw(cx).clear(cx));
     let Command::SetAulaSettings(request) = commands.try_recv().unwrap() else {
         panic!("Save must route through IPC")

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context as _, Result, bail};
 use clap::Subcommand;
-use openhid_hid::aula::{WiredConfigBlock, WiredMacroTable};
+use openhid_hid::aula::WiredConfigBlock;
 
 /// Wired AULA configuration block backup and restore commands.
 #[derive(Debug, Subcommand)]
@@ -39,7 +39,7 @@ pub enum AulaWiredCmd {
         #[arg(long)]
         apply: bool,
     },
-    /// Experimentally replace the complete 4096-byte macro table with backup and readback recovery.
+    /// Refuse wired macro-table writes until the OEM protocol is verified.
     WriteMacros {
         /// Exact identity printed by `openhid diag aula --wired-model-probe`.
         #[arg(long)]
@@ -93,28 +93,9 @@ impl AulaWiredCmd {
                     "The wired F87 Pro config block was written and verified from device readback."
                 );
             }
-            Self::WriteMacros {
-                identity,
-                input,
-                backup,
-                apply,
-            } => {
-                if !apply {
-                    bail!(
-                        "wired macro writes are experimental and persist immediately; pass --apply to continue"
-                    );
-                }
-                let bytes = std::fs::read(&input)
-                    .with_context(|| format!("read wired macro table {}", input.display()))?;
-                let target = WiredMacroTable::from_bytes(bytes)
-                    .context("validate the 4096-byte wired macro-table candidate")?;
-                let original = openhid_hid::read_aula_wired_macro_table(Some(&identity)).await?;
-                write_new_file(&backup, original.as_bytes())?;
-                openhid_hid::write_aula_wired_macro_table(Some(&identity), &original, &target)
-                    .await?;
-                println!(
-                    "The experimental wired macro-table candidate was written and verified. A complete original table was saved to {}. Event semantics and physical macro playback remain unverified.",
-                    backup.display()
+            Self::WriteMacros { .. } => {
+                bail!(
+                    "AULA wired macro writes are disabled until the macro read protocol produces a stable, complete backup"
                 );
             }
         }
