@@ -3293,9 +3293,9 @@ checksum = "70a09e0bf58aede45b8e7eed6e8d5d6552381c431014d62b349b0133008737bd"
 
 [[package]]
 name = "gpui-updater-core"
-version = "0.3.0"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9428ef61a5e4873dd903c00d79b27353bc963d4bdf649abe97e4a911ffd0a587"
+checksum = "26d2aff421b77aef4e40cb13205b67fd5b1282b493a62c10fd8ca2be59268484"
 dependencies = [
  "base64 0.22.1",
  "ed25519-compact",
@@ -3312,9 +3312,9 @@ dependencies = [
 
 [[package]]
 name = "gpui-updater-pre"
-version = "0.3.0"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b8bddcf109ba6da760b832419e771d761f876f5d53b6a61e5a3a82cb3e612ce"
+checksum = "a5993bccbacbbfabbb28a67292f62db56f5f23baddd138218ea445690ae78148"
 dependencies = [
  "futures",
  "gpui-pre",
@@ -3323,9 +3323,9 @@ dependencies = [
 
 [[package]]
 name = "gpui-updater-sparkle"
-version = "0.3.0"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a1c02d921642a4efbc6fc7eb9435c38de4459ea67d57a45a8264ffceb67b9f9"
+checksum = "70cc2965ad564e45379251b6c0b693e58838d6a8f5f6fe8b8e9306f8c2ccd750"
 dependencies = [
  "block2 0.6.2",
  "gpui-updater-core",

@@ -89,7 +89,6 @@ fn update_hero(updater: &Entity<Updater>, cx: &mut App) -> gpui::Div {
     };
 
     let message = match &status {
-        UpdateStatus::Idle | UpdateStatus::UpToDate => None,
         UpdateStatus::Checking => Some(tr!("updates.checking_for_updates")),
         UpdateStatus::Available(v) => Some(tr!("updates.update_version_available", version => v)),
         UpdateStatus::Downloading { downloaded, total } => Some(match total {
@@ -105,12 +104,10 @@ fn update_hero(updater: &Entity<Updater>, cx: &mut App) -> gpui::Div {
         UpdateStatus::Installing => Some(tr!("updates.installing")),
         UpdateStatus::Staged(v) => Some(tr!("updates.update_version_ready", version => v)),
         UpdateStatus::Errored(e) => Some(tr!("updates.update_failed_message", error => e.clone())),
+        _ => None,
     };
 
-    let busy = matches!(
-        status,
-        UpdateStatus::Checking | UpdateStatus::Downloading { .. } | UpdateStatus::Installing
-    );
+    let busy = status.is_busy();
 
     let action = {
         let u = updater.clone();
