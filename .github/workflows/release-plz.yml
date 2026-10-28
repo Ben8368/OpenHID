@@ -57,7 +57,7 @@ jobs:
           op-service-account-token: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           op-github-app-item: ${{ secrets.OP_GITHUB_APP_ITEM }}
       - name: Run release-plz (release-pr)
-        uses: release-plz/action@8921286633dfa0c4020f7f30bd1c14fe19cbb10e # v0.5
+        uses: release-plz/action@6caa8d34f74d82b0dc76a18edd1cc3d6801c9baf # v0.5
         with:
           command: release-pr
         env:
@@ -209,7 +209,7 @@ jobs:
           op-github-app-item: ${{ secrets.OP_GITHUB_APP_ITEM }}
       - name: Run release-plz (release)
         if: steps.release_commit.outputs.skip != 'true'
-        uses: release-plz/action@8921286633dfa0c4020f7f30bd1c14fe19cbb10e # v0.5
+        uses: release-plz/action@6caa8d34f74d82b0dc76a18edd1cc3d6801c9baf # v0.5
         with:
           command: release
         env:
