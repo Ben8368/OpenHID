@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read as _;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -348,14 +348,18 @@ pub fn sha256_of_file(path: &Path) -> Result<String, AssetError> {
         path: path.to_owned(),
         source,
     };
-    let mut file = fs::File::open(path).map_err(fail)?;
+    let file = fs::File::open(path).map_err(fail)?;
+    sha256_of_reader(file).map_err(fail)
+}
+
+fn sha256_of_reader(mut reader: impl Read) -> std::io::Result<String> {
     let mut hasher = Sha256::new();
     let mut buffer = [0; 16 * 1024];
     loop {
         let read = loop {
-            match file.read(&mut buffer) {
+            match reader.read(&mut buffer) {
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                result => break result.map_err(fail)?,
+                result => break result?,
             }
         };
         if read == 0 {
@@ -377,10 +381,36 @@ pub fn cached_matches(path: &Path, expected_sha: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        AssetClient, is_retryable, safe_component_path, sha256_hex, sha256_of_file, write_replace,
+        AssetClient, is_retryable, safe_component_path, sha256_hex, sha256_of_file,
+        sha256_of_reader, write_replace,
     };
+    use std::io::{self, Cursor, Read};
     use std::path::Path;
     use ureq::Error;
+
+    struct InterruptOnce<R> {
+        reader: R,
+        interrupted: bool,
+    }
+
+    impl<R: Read> Read for InterruptOnce<R> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if !self.interrupted {
+                self.interrupted = true;
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+
+            self.reader.read(buffer)
+        }
+    }
+
+    struct FailedReader;
+
+    impl Read for FailedReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        }
+    }
 
     #[test]
     fn sha256_helpers_return_lowercase_hex_for_memory_and_streamed_data() {
@@ -400,6 +430,26 @@ mod tests {
             sha256_of_file(&path).expect("hash streamed asset"),
             sha256_hex(&bytes)
         );
+    }
+
+    #[test]
+    fn sha256_of_reader_retries_interrupted_reads() {
+        let reader = InterruptOnce {
+            reader: Cursor::new(b"abc"),
+            interrupted: false,
+        };
+
+        assert_eq!(
+            sha256_of_reader(reader).expect("retry after interrupted read"),
+            sha256_hex(b"abc")
+        );
+    }
+
+    #[test]
+    fn sha256_of_reader_propagates_non_interrupted_read_errors() {
+        let error = sha256_of_reader(FailedReader).expect_err("propagate read error");
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     }
 
     #[test]
