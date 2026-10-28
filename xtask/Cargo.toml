@@ -33,7 +33,7 @@ quote = "1.0.47"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2_hasher = { version = "0.4.0", features = ["sync"] }
-strum = { version = "0.27", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 syn = "3.0.3"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
