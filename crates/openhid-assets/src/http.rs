@@ -12,11 +12,13 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use atomic_write_file::AtomicWriteFile;
 use backon::{BlockingRetryable, ExponentialBuilder};
+use openhid_fixture::format_hex;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
@@ -337,7 +339,7 @@ pub(crate) fn write_replace(dst: &Path, bytes: &[u8]) -> Result<(), AssetError> 
 /// Hex SHA-256 of an in-memory blob.
 #[must_use]
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    format_hex(&Sha256::digest(bytes))
 }
 
 /// Streamed hex SHA-256 of `path`.
@@ -346,10 +348,26 @@ pub fn sha256_of_file(path: &Path) -> Result<String, AssetError> {
         path: path.to_owned(),
         source,
     };
-    let mut file = fs::File::open(path).map_err(fail)?;
+    let file = fs::File::open(path).map_err(fail)?;
+    sha256_of_reader(file).map_err(fail)
+}
+
+fn sha256_of_reader(mut reader: impl Read) -> std::io::Result<String> {
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher).map_err(fail)?;
-    Ok(format!("{:x}", hasher.finalize()))
+    let mut buffer = [0; 16 * 1024];
+    loop {
+        let read = loop {
+            match reader.read(&mut buffer) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                result => break result?,
+            }
+        };
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format_hex(&hasher.finalize()))
 }
 
 /// Returns true when `path` exists and its SHA-256 matches `expected_sha`
@@ -362,9 +380,77 @@ pub fn cached_matches(path: &Path, expected_sha: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{AssetClient, is_retryable, safe_component_path, write_replace};
+    use super::{
+        AssetClient, is_retryable, safe_component_path, sha256_hex, sha256_of_file,
+        sha256_of_reader, write_replace,
+    };
+    use std::io::{self, Cursor, Read};
     use std::path::Path;
     use ureq::Error;
+
+    struct InterruptOnce<R> {
+        reader: R,
+        interrupted: bool,
+    }
+
+    impl<R: Read> Read for InterruptOnce<R> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if !self.interrupted {
+                self.interrupted = true;
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+
+            self.reader.read(buffer)
+        }
+    }
+
+    struct FailedReader;
+
+    impl Read for FailedReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        }
+    }
+
+    #[test]
+    fn sha256_helpers_return_lowercase_hex_for_memory_and_streamed_data() {
+        const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+        assert_eq!(sha256_hex(b"abc"), ABC_SHA256);
+
+        let bytes = (0_u8..=u8::MAX)
+            .cycle()
+            .take(32 * 1024 + 17)
+            .collect::<Vec<_>>();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("asset.bin");
+        std::fs::write(&path, &bytes).expect("write asset");
+
+        assert_eq!(
+            sha256_of_file(&path).expect("hash streamed asset"),
+            sha256_hex(&bytes)
+        );
+    }
+
+    #[test]
+    fn sha256_of_reader_retries_interrupted_reads() {
+        let reader = InterruptOnce {
+            reader: Cursor::new(b"abc"),
+            interrupted: false,
+        };
+
+        assert_eq!(
+            sha256_of_reader(reader).expect("retry after interrupted read"),
+            sha256_hex(b"abc")
+        );
+    }
+
+    #[test]
+    fn sha256_of_reader_propagates_non_interrupted_read_errors() {
+        let error = sha256_of_reader(FailedReader).expect_err("propagate read error");
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
 
     #[test]
     fn uniform_source_preserves_the_cloudflare_path() {

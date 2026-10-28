@@ -12,6 +12,7 @@ keywords = ["logitech", "openhid", "assets", "hid"]
 categories = ["hardware-support"]
 
 [dependencies]
+openhid-fixture = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ureq = { workspace = true }
